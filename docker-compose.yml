@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: ecoruta_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ecoruta
+      POSTGRES_PASSWORD: ecoruta123
+      POSTGRES_DB: ecoruta_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
