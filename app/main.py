@@ -1,10 +1,20 @@
 from fastapi import FastAPI
-from app.routers import nodos, lecturas
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import nodos, lecturas, panel
 
 app = FastAPI(title="EcoRuta API")
 
+# Necesario para que Flutter Web (otro puerto) pueda llamar a la API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # solo para desarrollo; en producción, el dominio real
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(nodos.router)
 app.include_router(lecturas.router)
+app.include_router(panel.router)
 
 
 @app.get("/")
