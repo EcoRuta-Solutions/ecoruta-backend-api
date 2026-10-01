@@ -1,6 +1,11 @@
-from fastapi import FastAPI
+import jwt
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, nodos, lecturas, panel
+from app.core.connection_manager import connection_manager
+from app.core.security import decode_token
+from app.database import SessionLocal
+from app.models.usuario import Usuario
 
 app = FastAPI(title="EcoRuta API")
 
@@ -16,6 +21,45 @@ app.include_router(auth.router)
 app.include_router(nodos.router)
 app.include_router(lecturas.router)
 app.include_router(panel.router)
+
+
+@app.websocket("/ws/panel")
+async def websocket_panel(websocket: WebSocket, token: str | None = Query(default=None)):
+    if not token:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+
+    db = SessionLocal()
+    try:
+        try:
+            payload = decode_token(token)
+            user_id = int(payload["sub"])
+        except (jwt.PyJWTError, KeyError, ValueError):
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+
+        usuario = db.get(Usuario, user_id)
+        if (
+            usuario is None
+            or not usuario.activo
+            or usuario.rol not in {"municipalidad", "conductor"}
+        ):
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+    finally:
+        db.close()
+
+    await connection_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        connection_manager.disconnect(websocket)
 
 
 @app.get("/")

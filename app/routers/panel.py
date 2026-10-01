@@ -5,20 +5,9 @@ from app.database import get_db
 from app.models.nodo import Nodo
 from app.models.lectura import Lectura
 from app.schemas.panel import NodoEstado, Resumen
+from app.core.estado_nodo import calcular_estado
 
 router = APIRouter(prefix="/panel", tags=["Panel"])
-
-UMBRAL_ALERTA = 50  # a partir de este % el nodo pasa a amarillo
-
-
-def calcular_estado(fill_pct, umbral_critico):
-    if fill_pct is None:
-        return "sin_datos"
-    if fill_pct >= umbral_critico:
-        return "critico"
-    if fill_pct >= UMBRAL_ALERTA:
-        return "alerta"
-    return "normal"
 
 
 def obtener_estados(db: Session) -> list[NodoEstado]:
