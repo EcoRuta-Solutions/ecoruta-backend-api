@@ -1,6 +1,10 @@
+import os
 import random
 import time
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API = "http://127.0.0.1:8000"
 SEGUNDOS_ENTRE_LECTURAS = 3
@@ -18,10 +22,55 @@ NODOS = [
 ]
 
 
-def crear_nodos():
+def obtener_clave_dispositivo():
+    clave = os.getenv("DEVICE_API_KEY")
+    if not clave:
+        raise SystemExit("Falta la variable de entorno DEVICE_API_KEY para el simulador.")
+    return clave
+
+
+def iniciar_sesion_municipal():
+    email = os.getenv("SIMULADOR_EMAIL")
+    password = os.getenv("SIMULADOR_PASSWORD")
+    faltantes = [
+        nombre
+        for nombre, valor in (
+            ("SIMULADOR_EMAIL", email),
+            ("SIMULADOR_PASSWORD", password),
+        )
+        if not valor
+    ]
+    if faltantes:
+        raise SystemExit(
+            "Faltan variables de entorno requeridas para el simulador: "
+            + ", ".join(faltantes)
+        )
+
+    try:
+        respuesta = requests.post(
+            f"{API}/auth/login",
+            data={"username": email, "password": password},
+            timeout=5,
+        )
+        respuesta.raise_for_status()
+    except requests.RequestException as error:
+        raise SystemExit(f"No se pudo iniciar sesión como municipalidad: {error}") from error
+
+    token = respuesta.json().get("access_token")
+    if not token:
+        raise SystemExit("El login municipal no devolvió un token de acceso.")
+    return token
+
+
+def crear_nodos(token):
     """Registra los nodos en la API. Si ya existen (409), los deja como están."""
     for nodo in NODOS:
-        r = requests.post(f"{API}/nodos/", json=nodo, timeout=5)
+        r = requests.post(
+            f"{API}/nodos/",
+            json=nodo,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
         if r.status_code == 201:
             print(f"Nodo creado: {nodo['codigo']} - {nodo['nombre']}")
         elif r.status_code == 409:
@@ -40,7 +89,7 @@ estado = {
 }
 
 
-def enviar_lecturas():
+def enviar_lecturas(api_key):
     for codigo, e in estado.items():
         # El nivel sube con algo de variación
         e["fill"] += e["tasa"] * random.uniform(0.5, 1.5)
@@ -65,17 +114,20 @@ def enviar_lecturas():
         r = requests.post(
             f"{API}/lecturas/",
             json={"codigo": codigo, "fill_pct": round(medido, 1), "tilt_alert": tilt},
+            headers={"X-API-Key": api_key},
             timeout=5,
         )
         print(f"{codigo}: {medido:5.1f}%  tilt={tilt}  -> {r.status_code}")
 
 
 if __name__ == "__main__":
-    crear_nodos()
+    clave_dispositivo = obtener_clave_dispositivo()
+    token_municipal = iniciar_sesion_municipal()
+    crear_nodos(token_municipal)
     print("\nSimulando lecturas. Ctrl+C para detener.\n")
     try:
         while True:
-            enviar_lecturas()
+            enviar_lecturas(clave_dispositivo)
             print("-" * 40)
             time.sleep(SEGUNDOS_ENTRE_LECTURAS)
     except KeyboardInterrupt:

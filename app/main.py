@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, nodos, lecturas, panel
+from app.routers import auth, nodos, lecturas, panel, reportes
 
 app = FastAPI(title="EcoRuta API")
 
@@ -16,6 +16,7 @@ app.include_router(auth.router)
 app.include_router(nodos.router)
 app.include_router(lecturas.router)
 app.include_router(panel.router)
+app.include_router(reportes.router)
 
 
 @app.get("/")

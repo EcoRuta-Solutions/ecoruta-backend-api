@@ -1,12 +1,17 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, aliased
 
+from app.core.deps import require_roles
 from app.database import get_db
 from app.models.nodo import Nodo
 from app.models.lectura import Lectura
 from app.schemas.panel import NodoEstado, Resumen
 
-router = APIRouter(prefix="/panel", tags=["Panel"])
+router = APIRouter(
+    prefix="/panel",
+    tags=["Panel"],
+    dependencies=[Depends(require_roles("municipalidad", "conductor"))],
+)
 
 UMBRAL_ALERTA = 50  # a partir de este % el nodo pasa a amarillo
 
