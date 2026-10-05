@@ -42,8 +42,6 @@ Para probar los endpoints protegidos hace falta un usuario por rol (`municipalid
 
 ## Endpoints y protección
 
-Estado esperado una vez integradas las dos ramas.
-
 | Método | Ruta | Quién puede usarlo | Parte |
 |---|---|---|---|
 | GET | `/` | Público | Base |
@@ -219,13 +217,14 @@ python -m pytest -q
 # Archivos compartidos entre las dos ramas
 
 Las dos ramas salen del mismo `main` y modifican estos archivos. Al fusionar, hay que conservar los cambios de ambas.
+
 | Archivo | Parte B | Parte D |
 |---|---|---|
 | `app/main.py` | Incluye el router `reportes` | Agrega la ruta `/ws/panel` |
 | `app/routers/lecturas.py` | `verify_device_key` en `POST /lecturas/` y `require_roles` en el historial | Eventos WebSocket tras guardar la lectura |
 | `app/routers/nodos.py` | `require_roles` en `GET` y `POST /nodos/` | Endpoint `GET /nodos/{id}/prediccion` |
 | `app/routers/panel.py` | Dependencia `require_roles` en el router | Usa `calcular_estado` compartido |
-| `requirements-dev.txt` | Archivo nuevo con pytest | Archivo nuevo con pytest (**choque de "archivo nuevo en ambas"**: dejar una sola línea de pytest) |
+| `requirements-dev.txt` | Archivo nuevo con pytest | Archivo nuevo con pytest (dejar una sola línea de pytest) |
 | `requirements.txt` | No lo toca | Nuevas dependencias y conversión a UTF-8 |
 | `README.md` | Sección de la Parte B | Sección de la Parte D |
 
