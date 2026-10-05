@@ -1,13 +1,18 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, aliased
 
+from app.core.deps import require_roles
 from app.database import get_db
 from app.models.nodo import Nodo
 from app.models.lectura import Lectura
 from app.schemas.panel import NodoEstado, Resumen
 from app.core.estado_nodo import calcular_estado
 
-router = APIRouter(prefix="/panel", tags=["Panel"])
+router = APIRouter(
+    prefix="/panel",
+    tags=["Panel"],
+    dependencies=[Depends(require_roles("municipalidad", "conductor"))],
+)
 
 
 def obtener_estados(db: Session) -> list[NodoEstado]:

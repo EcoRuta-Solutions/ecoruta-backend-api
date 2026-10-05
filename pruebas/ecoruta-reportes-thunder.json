@@ -1,0 +1,427 @@
+{
+  "client": "Thunder Client",
+  "collectionName": "EcoRuta - Reportes y roles",
+  "dateExported": "2026-09-30T00:00:00.000Z",
+  "version": "1.2",
+  "folders": [],
+  "requests": [
+    {
+      "_id": "report-create-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST reporte ciudadano - 201",
+      "url": "{{baseUrl}}/reportes",
+      "method": "POST",
+      "sortNum": 1000,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\n  \"latitud\": -8.1116,\n  \"longitud\": -79.0288,\n  \"descripcion\": \"Punto crítico de prueba\",\n  \"foto_url\": \"https://example.test/reporte.jpg\"\n}"}
+    },
+    {
+      "_id": "report-create-muni",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST reporte como municipalidad - 403",
+      "url": "{{baseUrl}}/reportes",
+      "method": "POST",
+      "sortNum": 1010,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"latitud\":0,\"longitud\":0,\"descripcion\":\"Prueba\"}"}
+    },
+    {
+      "_id": "report-create-driver",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST reporte como conductor - 403",
+      "url": "{{baseUrl}}/reportes",
+      "method": "POST",
+      "sortNum": 1020,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"latitud\":0,\"longitud\":0,\"descripcion\":\"Prueba\"}"}
+    },
+    {
+      "_id": "report-create-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST reporte sin token - 401",
+      "url": "{{baseUrl}}/reportes",
+      "method": "POST",
+      "sortNum": 1030,
+      "headers": [{"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"latitud\":0,\"longitud\":0,\"descripcion\":\"Prueba\"}"}
+    },
+    {
+      "_id": "report-create-invalid",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST reporte con coordenadas inválidas - 422",
+      "url": "{{baseUrl}}/reportes",
+      "method": "POST",
+      "sortNum": 1040,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"latitud\":91,\"longitud\":0,\"descripcion\":\"Prueba\"}"}
+    },
+    {
+      "_id": "report-list-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes municipalidad - 200",
+      "url": "{{baseUrl}}/reportes?limit=20&offset=0",
+      "method": "GET",
+      "sortNum": 1100,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "report-list-filter",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes filtrados por estado - 200",
+      "url": "{{baseUrl}}/reportes?estado=pendiente",
+      "method": "GET",
+      "sortNum": 1110,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "report-list-invalid-state",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes con estado inválido - 422",
+      "url": "{{baseUrl}}/reportes?estado=otro",
+      "method": "GET",
+      "sortNum": 1120,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "report-list-citizen",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes como ciudadano - 403",
+      "url": "{{baseUrl}}/reportes",
+      "method": "GET",
+      "sortNum": 1130,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "report-list-driver",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes como conductor - 403",
+      "url": "{{baseUrl}}/reportes",
+      "method": "GET",
+      "sortNum": 1140,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}]
+    },
+    {
+      "_id": "report-list-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET reportes sin token - 401",
+      "url": "{{baseUrl}}/reportes",
+      "method": "GET",
+      "sortNum": 1150,
+      "headers": []
+    },
+    {
+      "_id": "report-patch-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH marcar atendido - 200",
+      "url": "{{baseUrl}}/reportes/{{reporteId}}",
+      "method": "PATCH",
+      "sortNum": 1200,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "report-patch-idempotent",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH reporte ya atendido - 200 sin cambios",
+      "url": "{{baseUrl}}/reportes/{{reporteId}}",
+      "method": "PATCH",
+      "sortNum": 1210,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "report-patch-missing",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH id inexistente - 404",
+      "url": "{{baseUrl}}/reportes/999999999",
+      "method": "PATCH",
+      "sortNum": 1220,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "report-patch-citizen",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH reporte como ciudadano - 403",
+      "url": "{{baseUrl}}/reportes/{{reporteId}}",
+      "method": "PATCH",
+      "sortNum": 1230,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "report-patch-driver",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH reporte como conductor - 403",
+      "url": "{{baseUrl}}/reportes/{{reporteId}}",
+      "method": "PATCH",
+      "sortNum": 1240,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "report-patch-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "PATCH reporte sin token - 401",
+      "url": "{{baseUrl}}/reportes/{{reporteId}}",
+      "method": "PATCH",
+      "sortNum": 1250,
+      "headers": [{"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"estado\":\"atendido\"}"}
+    },
+    {
+      "_id": "auth-me-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET usuario actual con token - 200",
+      "url": "{{baseUrl}}/auth/me",
+      "method": "GET",
+      "sortNum": 1260,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "auth-me-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET usuario actual sin token - 401",
+      "url": "{{baseUrl}}/auth/me",
+      "method": "GET",
+      "sortNum": 1270,
+      "headers": []
+    },
+    {
+      "_id": "nodos-get-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET nodos como municipalidad - 200",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "GET",
+      "sortNum": 2000,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "nodos-get-forbidden",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET nodos como ciudadano - 403",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "GET",
+      "sortNum": 2010,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "nodos-get-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET nodos sin token - 401",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "GET",
+      "sortNum": 2020,
+      "headers": []
+    },
+    {
+      "_id": "nodos-post-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST nodo municipalidad - 201 o 409 existente",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "POST",
+      "sortNum": 2030,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{nuevoCodigo}}\",\"nombre\":\"Nodo Thunder\",\"latitud\":-8.11,\"longitud\":-79.02}"}
+    },
+    {
+      "_id": "nodos-post-invalid",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST nodo inválido - 422",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "POST",
+      "sortNum": 2040,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{nuevoCodigo}}\"}"}
+    },
+    {
+      "_id": "nodos-post-forbidden",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST nodo como conductor - 403",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "POST",
+      "sortNum": 2050,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{nuevoCodigo}}\",\"nombre\":\"Nodo Thunder\",\"latitud\":0,\"longitud\":0}"}
+    },
+    {
+      "_id": "nodos-post-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST nodo sin token - 401",
+      "url": "{{baseUrl}}/nodos/",
+      "method": "POST",
+      "sortNum": 2060,
+      "headers": [{"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{nuevoCodigo}}\",\"nombre\":\"Nodo Thunder\",\"latitud\":0,\"longitud\":0}"}
+    },
+    {
+      "_id": "lecturas-post-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST lectura con X-API-Key - 201",
+      "url": "{{baseUrl}}/lecturas/",
+      "method": "POST",
+      "sortNum": 2100,
+      "headers": [{"name": "X-API-Key", "value": "{{deviceApiKey}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{codigoNodoExistente}}\",\"fill_pct\":42,\"tilt_alert\":false}"}
+    },
+    {
+      "_id": "lecturas-post-no-key",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST lectura sin X-API-Key - 401",
+      "url": "{{baseUrl}}/lecturas/",
+      "method": "POST",
+      "sortNum": 2110,
+      "headers": [{"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{codigoNodoExistente}}\",\"fill_pct\":42,\"tilt_alert\":false}"}
+    },
+    {
+      "_id": "lecturas-post-invalid",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "POST lectura con fill inválido - 422",
+      "url": "{{baseUrl}}/lecturas/",
+      "method": "POST",
+      "sortNum": 2120,
+      "headers": [{"name": "X-API-Key", "value": "{{deviceApiKey}}"}, {"name": "Content-Type", "value": "application/json"}],
+      "body": {"type": "json", "raw": "{\"codigo\":\"{{codigoNodoExistente}}\",\"fill_pct\":101,\"tilt_alert\":false}"}
+    },
+    {
+      "_id": "history-get-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET historial como conductor - 200",
+      "url": "{{baseUrl}}/nodos/{{nodoId}}/lecturas",
+      "method": "GET",
+      "sortNum": 2200,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}]
+    },
+    {
+      "_id": "history-get-forbidden",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET historial como ciudadano - 403",
+      "url": "{{baseUrl}}/nodos/{{nodoId}}/lecturas",
+      "method": "GET",
+      "sortNum": 2210,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "history-get-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET historial sin token - 401",
+      "url": "{{baseUrl}}/nodos/{{nodoId}}/lecturas",
+      "method": "GET",
+      "sortNum": 2220,
+      "headers": []
+    },
+    {
+      "_id": "history-get-invalid",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET historial con id no numérico - 422",
+      "url": "{{baseUrl}}/nodos/no-es-id/lecturas",
+      "method": "GET",
+      "sortNum": 2230,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}]
+    },
+    {
+      "_id": "panel-state-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel estado como municipalidad - 200",
+      "url": "{{baseUrl}}/panel/estado",
+      "method": "GET",
+      "sortNum": 2300,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "panel-state-forbidden",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel estado como ciudadano - 403",
+      "url": "{{baseUrl}}/panel/estado",
+      "method": "GET",
+      "sortNum": 2310,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "panel-critical-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel críticos como conductor - 200",
+      "url": "{{baseUrl}}/panel/criticos",
+      "method": "GET",
+      "sortNum": 2320,
+      "headers": [{"name": "Authorization", "value": "Bearer {{conductorToken}}"}]
+    },
+    {
+      "_id": "panel-critical-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel críticos sin token - 401",
+      "url": "{{baseUrl}}/panel/criticos",
+      "method": "GET",
+      "sortNum": 2330,
+      "headers": []
+    },
+    {
+      "_id": "panel-summary-ok",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel resumen como municipalidad - 200",
+      "url": "{{baseUrl}}/panel/resumen",
+      "method": "GET",
+      "sortNum": 2340,
+      "headers": [{"name": "Authorization", "value": "Bearer {{municipalidadToken}}"}]
+    },
+    {
+      "_id": "panel-summary-forbidden",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel resumen como ciudadano - 403",
+      "url": "{{baseUrl}}/panel/resumen",
+      "method": "GET",
+      "sortNum": 2350,
+      "headers": [{"name": "Authorization", "value": "Bearer {{ciudadanoToken}}"}]
+    },
+    {
+      "_id": "panel-summary-anon",
+      "colId": "ecoruta-reportes",
+      "containerId": "",
+      "name": "GET panel resumen sin token - 401",
+      "url": "{{baseUrl}}/panel/resumen",
+      "method": "GET",
+      "sortNum": 2360,
+      "headers": []
+    }
+  ]
+}

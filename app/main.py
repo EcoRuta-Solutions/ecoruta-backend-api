@@ -1,7 +1,7 @@
 import jwt
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, nodos, lecturas, panel
+from app.routers import auth, nodos, lecturas, panel, reportes
 from app.core.connection_manager import connection_manager
 from app.core.security import decode_token
 from app.database import SessionLocal
@@ -21,6 +21,7 @@ app.include_router(auth.router)
 app.include_router(nodos.router)
 app.include_router(lecturas.router)
 app.include_router(panel.router)
+app.include_router(reportes.router)
 
 
 @app.websocket("/ws/panel")

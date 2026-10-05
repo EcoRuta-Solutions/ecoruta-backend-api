@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_roles, verify_device_key
 from app.database import get_db
 from app.models.nodo import Nodo
 from app.models.lectura import Lectura
@@ -11,7 +12,12 @@ from app.core.estado_nodo import calcular_estado
 router = APIRouter(tags=["Lecturas"])
 
 
-@router.post("/lecturas/", response_model=LecturaOut, status_code=201)
+@router.post(
+    "/lecturas/",
+    response_model=LecturaOut,
+    status_code=201,
+    dependencies=[Depends(verify_device_key)],
+)
 def crear_lectura(
     datos: LecturaCreate,
     background_tasks: BackgroundTasks,
@@ -60,7 +66,11 @@ def crear_lectura(
     return lectura
 
 
-@router.get("/nodos/{nodo_id}/lecturas", response_model=list[LecturaOut])
+@router.get(
+    "/nodos/{nodo_id}/lecturas",
+    response_model=list[LecturaOut],
+    dependencies=[Depends(require_roles("municipalidad", "conductor"))],
+)
 def historial_nodo(nodo_id: int, limite: int = 100, db: Session = Depends(get_db)):
     nodo = db.get(Nodo, nodo_id)
     if nodo is None:
