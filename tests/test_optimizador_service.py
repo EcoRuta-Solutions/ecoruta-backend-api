@@ -78,3 +78,48 @@ def test_matriz_distancias_calcula_valores_esperados() -> None:
 
     assert matriz[0][1] == pytest.approx(111.195, abs=0.01)
     assert matriz[1][0] == pytest.approx(111.195, abs=0.01)
+
+def test_ortools_devuelve_todos_los_nodos_sin_repetir() -> None:
+    nodos = [
+        crear_nodo(0.0, 0.0),
+        crear_nodo(0.0, 1.0),
+        crear_nodo(1.0, 1.0),
+        crear_nodo(1.0, 0.0),
+    ]
+
+    nodos[0].id = 1
+    nodos[1].id = 2
+    nodos[2].id = 3
+    nodos[3].id = 4
+
+    orden = optimizador_service.optimizar_con_ortools(nodos)
+
+    assert len(orden) == 4
+    assert len(set(orden)) == 4
+    assert set(orden) == {1, 2, 3, 4}
+    assert orden[0] == 1
+
+
+def test_ortools_un_solo_nodo_devuelve_su_id() -> None:
+    nodo = crear_nodo(-8.1116, -79.0288)
+    nodo.id = 10
+
+    orden = optimizador_service.optimizar_con_ortools([nodo])
+
+    assert orden == [10]
+
+
+def test_ortools_rechaza_indice_de_inicio_invalido() -> None:
+    nodos = [
+        crear_nodo(0.0, 0.0),
+        crear_nodo(0.0, 1.0),
+    ]
+
+    nodos[0].id = 1
+    nodos[1].id = 2
+
+    with pytest.raises(ValueError, match="indice_inicio fuera del rango de nodos"):
+        optimizador_service.optimizar_con_ortools(
+            nodos,
+            indice_inicio=5,
+        )
