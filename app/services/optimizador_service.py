@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import Any, Sequence
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
@@ -215,7 +216,7 @@ def optimizar_con_clarke_wright(
     - Unión de rutas cuando los extremos permiten la combinación.
 
     Retorna los IDs de los nodos en el orden recomendado,
-    sin repetir el nodo inicial al final.
+    comenzando por el nodo de inicio y sin repetirlo al final.
     """
     if not nodos:
         return []
@@ -319,6 +320,171 @@ def optimizar_con_clarke_wright(
     ruta_indices = next(iter(rutas.values()))
 
     return [
+        nodos[depot].id,
+        *[
+            nodos[indice].id
+            for indice in ruta_indices
+        ],
+    ]
+
+
+def calcular_costo_ruta(
+    matriz_distancias: list[list[float]],
+    ruta_indices: Sequence[int],
+    indice_inicio: int,
+) -> float:
+    """
+    Calcula el costo total de una ruta.
+
+    La ruta sale del nodo de inicio, visita todos los nodos
+    y regresa al nodo de inicio.
+    """
+    if not ruta_indices:
+        return 0.0
+
+    costo = 0.0
+
+    actual = indice_inicio
+
+    for siguiente in ruta_indices:
+        costo += matriz_distancias[actual][siguiente]
+        actual = siguiente
+
+    costo += matriz_distancias[actual][indice_inicio]
+
+    return costo
+
+
+def optimizar_con_busqueda_tabu(
+    nodos: Sequence[Any],
+    indice_inicio: int = 0,
+    iteraciones_maximas: int = 100,
+    tamano_tabu: int = 10,
+) -> list[int]:
+    """
+    Mejora la solución de Clarke-Wright utilizando búsqueda tabú.
+
+    El algoritmo:
+    1. Obtiene una solución inicial con Clarke-Wright.
+    2. Genera vecinos intercambiando posiciones de dos nodos.
+    3. Evalúa el costo de cada vecino.
+    4. Mantiene una lista tabú para evitar volver inmediatamente
+       a movimientos recientes.
+    5. Permite una excepción de aspiración cuando una solución
+       tabú mejora la mejor solución encontrada.
+
+    Retorna los IDs de los nodos en el orden recomendado,
+    comenzando por el nodo de inicio y sin repetirlo al final.
+    """
+    if not nodos:
+        return []
+
+    if indice_inicio < 0 or indice_inicio >= len(nodos):
+        raise ValueError("indice_inicio fuera del rango de nodos")
+
+    if iteraciones_maximas <= 0:
+        raise ValueError(
+            "iteraciones_maximas debe ser mayor que cero"
+        )
+
+    if tamano_tabu <= 0:
+        raise ValueError(
+            "tamano_tabu debe ser mayor que cero"
+        )
+
+    if len(nodos) == 1:
+        return [nodos[0].id]
+
+    matriz_distancias = construir_matriz_distancias(nodos)
+
+    # Clarke-Wright entrega la solución inicial en IDs.
+    ruta_inicial_ids = optimizar_con_clarke_wright(
+        nodos,
+        indice_inicio=indice_inicio,
+    )
+
+    id_a_indice = {
+        nodo.id: indice
+        for indice, nodo in enumerate(nodos)
+    }
+
+    ruta_actual = [
+        id_a_indice[nodo_id]
+        for nodo_id in ruta_inicial_ids
+    ]
+
+    # El primer elemento es el depósito y no debe modificarse.
+    mejor_ruta = ruta_actual.copy()
+    mejor_costo = calcular_costo_ruta(
+        matriz_distancias,
+        mejor_ruta[1:],
+        indice_inicio,
+    )
+
+    costo_actual = mejor_costo
+
+    lista_tabu: deque[tuple[int, int]] = deque(
+        maxlen=tamano_tabu
+    )
+
+    for _ in range(iteraciones_maximas):
+        mejor_candidato = None
+        mejor_candidato_costo = math.inf
+        mejor_movimiento = None
+
+        # Solo intercambiamos nodos de recolección.
+        for posicion_i in range(1, len(ruta_actual) - 1):
+            for posicion_j in range(
+                posicion_i + 1,
+                len(ruta_actual),
+            ):
+                candidato = ruta_actual.copy()
+
+                nodo_i = candidato[posicion_i]
+                nodo_j = candidato[posicion_j]
+
+                candidato[posicion_i], candidato[posicion_j] = (
+                    candidato[posicion_j],
+                    candidato[posicion_i],
+                )
+
+                movimiento = tuple(
+                    sorted((nodo_i, nodo_j))
+                )
+
+                candidato_costo = calcular_costo_ruta(
+                    matriz_distancias,
+                    candidato[1:],
+                    indice_inicio,
+                )
+
+                es_tabu = movimiento in lista_tabu
+
+                # Criterio de aspiración:
+                # permitimos un movimiento tabú si mejora
+                # la mejor solución global.
+                if es_tabu and candidato_costo >= mejor_costo:
+                    continue
+
+                if candidato_costo < mejor_candidato_costo:
+                    mejor_candidato = candidato
+                    mejor_candidato_costo = candidato_costo
+                    mejor_movimiento = movimiento
+
+        if mejor_candidato is None:
+            break
+
+        ruta_actual = mejor_candidato
+        costo_actual = mejor_candidato_costo
+
+        if mejor_movimiento is not None:
+            lista_tabu.append(mejor_movimiento)
+
+        if costo_actual < mejor_costo:
+            mejor_ruta = ruta_actual.copy()
+            mejor_costo = costo_actual
+
+    return [
         nodos[indice].id
-        for indice in ruta_indices
+        for indice in mejor_ruta
     ]
