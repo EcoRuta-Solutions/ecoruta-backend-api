@@ -198,3 +198,127 @@ def optimizar_con_ortools(
         )
 
     return orden
+
+
+def optimizar_con_clarke_wright(
+    nodos: Sequence[Any],
+    indice_inicio: int = 0,
+) -> list[int]:
+    """
+    Calcula un orden recomendado utilizando la heurística
+    de Clarke-Wright.
+
+    La implementación utiliza:
+    - Un solo nodo de inicio como depósito.
+    - Distancias Haversine.
+    - Cálculo de ahorros entre pares de nodos.
+    - Unión de rutas cuando los extremos permiten la combinación.
+
+    Retorna los IDs de los nodos en el orden recomendado,
+    sin repetir el nodo inicial al final.
+    """
+    if not nodos:
+        return []
+
+    if indice_inicio < 0 or indice_inicio >= len(nodos):
+        raise ValueError("indice_inicio fuera del rango de nodos")
+
+    if len(nodos) == 1:
+        return [nodos[0].id]
+
+    matriz_distancias = construir_matriz_distancias(nodos)
+    depot = indice_inicio
+
+    clientes = [
+        indice
+        for indice in range(len(nodos))
+        if indice != depot
+    ]
+
+    # Al inicio cada cliente forma una ruta independiente:
+    # deposito -> cliente -> deposito
+    rutas: dict[int, list[int]] = {
+        indice: [indice]
+        for indice in clientes
+    }
+
+    # Indica a qué ruta pertenece actualmente cada cliente.
+    ruta_por_nodo: dict[int, int] = {
+        indice: indice
+        for indice in clientes
+    }
+
+    # Calculamos los ahorros:
+    #
+    # ahorro(i, j) =
+    # distancia(depot, i)
+    # + distancia(depot, j)
+    # - distancia(i, j)
+    ahorros: list[tuple[float, int, int]] = []
+
+    for posicion_i in range(len(clientes)):
+        for posicion_j in range(posicion_i + 1, len(clientes)):
+            i = clientes[posicion_i]
+            j = clientes[posicion_j]
+
+            ahorro = (
+                matriz_distancias[depot][i]
+                + matriz_distancias[depot][j]
+                - matriz_distancias[i][j]
+            )
+
+            ahorros.append((ahorro, i, j))
+
+    # Primero intentamos las uniones que generan mayor ahorro.
+    ahorros.sort(
+        key=lambda elemento: elemento[0],
+        reverse=True,
+    )
+
+    for _, i, j in ahorros:
+        ruta_i_id = ruta_por_nodo[i]
+        ruta_j_id = ruta_por_nodo[j]
+
+        # Ya pertenecen a la misma ruta.
+        if ruta_i_id == ruta_j_id:
+            continue
+
+        ruta_i = rutas[ruta_i_id]
+        ruta_j = rutas[ruta_j_id]
+
+        # Caso 1:
+        # i está al final de su ruta y j al inicio de la otra.
+        if ruta_i[-1] == i and ruta_j[0] == j:
+            ruta_combinada = ruta_i + ruta_j
+            ruta_base_id = ruta_i_id
+            ruta_eliminada_id = ruta_j_id
+
+        # Caso 2:
+        # j está al final de su ruta y i al inicio de la otra.
+        elif ruta_j[-1] == j and ruta_i[0] == i:
+            ruta_combinada = ruta_j + ruta_i
+            ruta_base_id = ruta_j_id
+            ruta_eliminada_id = ruta_i_id
+
+        else:
+            continue
+
+        rutas[ruta_base_id] = ruta_combinada
+        del rutas[ruta_eliminada_id]
+
+        for nodo_indice in ruta_combinada:
+            ruta_por_nodo[nodo_indice] = ruta_base_id
+
+    # Sin restricciones de capacidad, todas las rutas deberían
+    # terminar formando una única ruta.
+    if len(rutas) != 1:
+        raise RuntimeError(
+            "Clarke-Wright no pudo formar una única ruta"
+        )
+
+    ruta_indices = next(iter(rutas.values()))
+
+    return [
+        nodos[indice].id
+        for indice in ruta_indices
+    ]
