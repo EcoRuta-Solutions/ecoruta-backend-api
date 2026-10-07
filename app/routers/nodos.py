@@ -7,6 +7,7 @@ from app.models.nodo import Nodo
 from app.models.lectura import Lectura
 from app.schemas.nodo import NodoCreate, NodoOut
 from app.schemas.prediccion import PrediccionOut
+from app.schemas.optimizacion import RutaOptimizadaOut
 from app.services.prediccion_service import estimar_horas_critico
 from app.services.optimizador_service import optimizar_con_ortools
 
@@ -48,6 +49,7 @@ def crear_nodo(datos: NodoCreate, db: Session = Depends(get_db)):
 
 @router.get(
     "/optimizar",
+    response_model=RutaOptimizadaOut,
     dependencies=[Depends(require_roles("municipalidad", "conductor"))],
 )
 def optimizar_ruta(
@@ -58,7 +60,7 @@ def optimizar_ruta(
 
     if not nodos:
         return {
-            "inicio_id": None,
+            "inicio_id": 0,
             "ruta": [],
             "cantidad_nodos": 0,
         }
