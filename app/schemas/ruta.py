@@ -44,3 +44,17 @@ class RutaOut(BaseModel):
     )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RutaGenerarRequest(BaseModel):
+    fecha: date
+    camion_id: int = Field(gt=0)
+    inicio_id: int | None = Field(default=None, gt=0)
+
+
+class RutaGenerarOut(BaseModel):
+    ruta: RutaOut
+    metodo: str
+    distancia_km: float
+    distancia_ortools_km: float
+    distancia_heuristica_km: float
