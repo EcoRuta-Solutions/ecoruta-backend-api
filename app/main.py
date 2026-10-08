@@ -18,13 +18,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(nodos.router, prefix="/nodos", tags=["nodos"])
-app.include_router(lecturas.router, prefix="/lecturas", tags=["lecturas"])
-app.include_router(panel.router, prefix="/panel", tags=["panel"])
-app.include_router(reportes.router, prefix="/reportes", tags=["reportes"])
-app.include_router(camiones.router, prefix="/camiones", tags=["camiones"])
-app.include_router(rutas.router, prefix="/rutas", tags=["rutas"])
+app.include_router(auth.router)
+app.include_router(nodos.router)
+app.include_router(lecturas.router)
+app.include_router(panel.router)
+app.include_router(reportes.router)
+app.include_router(camiones.router)
+app.include_router(rutas.router)
 
 
 @app.websocket("/ws/panel")
