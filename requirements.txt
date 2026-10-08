@@ -29,3 +29,4 @@ urllib3==2.8.0
 scikit-learn==1.7.2
 websockets==15.0.1
 uvicorn==0.54.0
+ortools==9.15.6755
