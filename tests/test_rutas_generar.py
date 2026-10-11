@@ -1,9 +1,11 @@
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy.sql import operators
 
 from app.models.ruta import Parada, Ruta
 from app.routers import rutas
@@ -180,3 +182,22 @@ def test_schema_rechaza_fecha_invalida_y_camion_cero():
 
     with pytest.raises(ValidationError):
         RutaGenerarRequest(fecha=date(2026, 10, 9), camion_id=0)
+
+
+def test_rutas_del_dia_incluye_rutas_que_siguen_activas():
+    query = Mock()
+    query.options.return_value = query
+    query.filter.return_value = query
+    query.order_by.return_value = query
+    query.all.return_value = []
+    db = Mock()
+    db.query.return_value = query
+
+    rutas.rutas_del_dia(db)
+
+    condiciones = query.filter.call_args.args
+    assert len(condiciones) == 2
+    assert str(condiciones[0].left) == "rutas.fecha_inicio"
+    assert condiciones[0].operator is operators.le
+    assert str(condiciones[1].left) == "rutas.fecha_fin"
+    assert condiciones[1].operator is operators.ge

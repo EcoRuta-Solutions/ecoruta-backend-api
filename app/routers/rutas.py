@@ -115,7 +115,7 @@ def rutas_del_dia(db: Session = Depends(get_db)):
             joinedload(Ruta.camion),
             selectinload(Ruta.paradas),
         )
-        .filter(Ruta.fecha_inicio == hoy)
+        .filter(Ruta.fecha_inicio <= hoy, Ruta.fecha_fin >= hoy)
         .order_by(Ruta.id)
         .all()
     )
