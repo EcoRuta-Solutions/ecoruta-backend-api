@@ -1,9 +1,20 @@
+import os
 import random
 import time
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API = "http://127.0.0.1:8000"
 SEGUNDOS_ENTRE_LECTURAS = 3
+
+# --- Credenciales del usuario municipalidad que crea los nodos ---
+MUNICIPALIDAD_EMAIL = "municipalidad3@ecoruta.com"
+MUNICIPALIDAD_PASSWORD = "Muni456"
+
+# --- API key del dispositivo (la misma que tienes en tu .env) ---
+DEVICE_API_KEY = os.getenv("DEVICE_API_KEY", "")
 
 # Coordenadas aproximadas en Trujillo; ajústalas si quieres
 NODOS = [
@@ -18,10 +29,29 @@ NODOS = [
 ]
 
 
-def crear_nodos():
+def login_municipalidad() -> dict:
+    """
+    Se loguea como usuario municipalidad y devuelve el header
+    Authorization listo para usar en las peticiones que lo necesiten.
+    """
+    r = requests.post(
+        f"{API}/auth/login",
+        data={"username": MUNICIPALIDAD_EMAIL, "password": MUNICIPALIDAD_PASSWORD},
+        timeout=5,
+    )
+    if r.status_code != 200:
+        raise SystemExit(
+            f"No se pudo loguear como municipalidad ({r.status_code}): {r.text}\n"
+            "Revisa MUNICIPALIDAD_EMAIL / MUNICIPALIDAD_PASSWORD en este archivo."
+        )
+    token = r.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def crear_nodos(auth_headers: dict):
     """Registra los nodos en la API. Si ya existen (409), los deja como están."""
     for nodo in NODOS:
-        r = requests.post(f"{API}/nodos/", json=nodo, timeout=5)
+        r = requests.post(f"{API}/nodos/", json=nodo, headers=auth_headers, timeout=5)
         if r.status_code == 201:
             print(f"Nodo creado: {nodo['codigo']} - {nodo['nombre']}")
         elif r.status_code == 409:
@@ -40,7 +70,7 @@ estado = {
 }
 
 
-def enviar_lecturas():
+def enviar_lecturas(device_headers: dict):
     for codigo, e in estado.items():
         # El nivel sube con algo de variación
         e["fill"] += e["tasa"] * random.uniform(0.5, 1.5)
@@ -65,17 +95,24 @@ def enviar_lecturas():
         r = requests.post(
             f"{API}/lecturas/",
             json={"codigo": codigo, "fill_pct": round(medido, 1), "tilt_alert": tilt},
+            headers=device_headers,
             timeout=5,
         )
         print(f"{codigo}: {medido:5.1f}%  tilt={tilt}  -> {r.status_code}")
 
 
 if __name__ == "__main__":
-    crear_nodos()
+    if not DEVICE_API_KEY:
+        raise SystemExit("No encontré DEVICE_API_KEY en tu .env. Revisa que exista esa línea.")
+
+    auth_headers = login_municipalidad()
+    device_headers = {"X-API-Key": DEVICE_API_KEY}
+
+    crear_nodos(auth_headers)
     print("\nSimulando lecturas. Ctrl+C para detener.\n")
     try:
         while True:
-            enviar_lecturas()
+            enviar_lecturas(device_headers)
             print("-" * 40)
             time.sleep(SEGUNDOS_ENTRE_LECTURAS)
     except KeyboardInterrupt:

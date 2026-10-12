@@ -1,2 +1,5 @@
 # ecoruta-backend-api
-API REST en Java Spring Boot para la gestión de contenedores, usuarios y rutas de recolección - EcoRuta
+## Stack
+- Backend: Python 3 + FastAPI
+- Base de datos: PostgreSQL + PostGIS (vía Docker)
+- Autenticación: JWT (roles: municipalidad, conductor, ciudadano) + API key para dispositivos IoT
