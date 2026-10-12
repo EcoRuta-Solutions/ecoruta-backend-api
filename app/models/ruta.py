@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, Date, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -11,9 +11,11 @@ class Ruta(Base):
     hora_inicio = Column(DateTime, nullable=False)
     hora_fin = Column(DateTime, nullable=False)
     camion_id = Column(Integer, ForeignKey("camiones.id"), nullable=False)
+    conductor_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     estado = Column(String, nullable=False) # Pendiente, en_proceso, Completado, Cancelado
 
     camion = relationship("Camion")
+    conductor = relationship("Usuario")
     paradas = relationship("Parada", back_populates="ruta", cascade="all, delete-orphan")
 
 class Parada(Base):
@@ -23,6 +25,7 @@ class Parada(Base):
     ruta_id = Column(Integer, ForeignKey("rutas.id"), nullable=False)
     nodo_id = Column(Integer, ForeignKey("nodos.id"), nullable=False)
     orden = Column(Integer, nullable=False) # Orden de la parada en la ruta
+    recolectado = Column(Boolean, nullable=False, default=False)
 
     ruta = relationship("Ruta", back_populates="paradas")
     nodo = relationship("Nodo")

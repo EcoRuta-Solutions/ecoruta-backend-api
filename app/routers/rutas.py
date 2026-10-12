@@ -3,14 +3,18 @@ from datetime import date, datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.core.deps import require_roles
+from app.core.deps import get_current_user, require_roles
 from app.database import get_db
 from app.models.camion import Camion
 from app.models.nodo import Nodo
 from app.models.ruta import Parada, Ruta
+from app.models.usuario import Usuario
 from app.routers.panel import obtener_estados
 from app.schemas.ruta import (
+    ParadaOut,
+    ParadaUpdate,
     RutaCreate,
+    RutaEstadoUpdate,
     RutaGenerarOut,
     RutaGenerarRequest,
     RutaOut,
@@ -19,6 +23,19 @@ from app.services.optimizador_service import comparar_optimizadores
 
 
 router = APIRouter(prefix="/rutas", tags=["Rutas"])
+
+
+def _validar_conductor(db: Session, conductor_id: int | None) -> None:
+    if conductor_id is None:
+        return
+
+    conductor = db.get(Usuario, conductor_id)
+
+    if conductor is None or conductor.rol != "conductor":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conductor no encontrado",
+        )
 
 
 @router.post(
@@ -38,6 +55,8 @@ def crear_ruta(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Camión no encontrado",
         )
+
+    _validar_conductor(db, datos.conductor_id)
 
     if datos.fecha_fin < datos.fecha_inicio:
         raise HTTPException(
@@ -74,6 +93,7 @@ def crear_ruta(
         hora_inicio=datos.hora_inicio,
         hora_fin=datos.hora_fin,
         camion_id=datos.camion_id,
+        conductor_id=datos.conductor_id,
         estado="Pendiente",
     )
 
@@ -100,6 +120,25 @@ def crear_ruta(
 
 
 @router.get(
+    "/mias",
+    response_model=list[RutaOut],
+)
+def mis_rutas(
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(require_roles("municipalidad", "conductor")),
+):
+    consulta = db.query(Ruta).options(
+        joinedload(Ruta.camion),
+        selectinload(Ruta.paradas).joinedload(Parada.nodo),
+    )
+
+    if usuario.rol == "conductor":
+        consulta = consulta.filter(Ruta.conductor_id == usuario.id)
+
+    return consulta.order_by(Ruta.id).all()
+
+
+@router.get(
     "/hoy",
     response_model=list[RutaOut],
     dependencies=[
@@ -113,7 +152,7 @@ def rutas_del_dia(db: Session = Depends(get_db)):
         db.query(Ruta)
         .options(
             joinedload(Ruta.camion),
-            selectinload(Ruta.paradas),
+            selectinload(Ruta.paradas).joinedload(Parada.nodo),
         )
         .filter(Ruta.fecha_inicio <= hoy, Ruta.fecha_fin >= hoy)
         .order_by(Ruta.id)
@@ -142,6 +181,8 @@ def generar_ruta(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Camión no encontrado",
         )
+
+    _validar_conductor(db, datos.conductor_id)
 
     hora = TURNOS_HORA_INICIO.get(camion.turno.strip().lower())
 
@@ -226,6 +267,7 @@ def generar_ruta(
         hora_inicio=hora_inicio,
         hora_fin=hora_fin,
         camion_id=datos.camion_id,
+        conductor_id=datos.conductor_id,
         estado="Pendiente",
     )
 
@@ -256,3 +298,115 @@ def generar_ruta(
         "distancia_ortools_km": comparacion["distancia_ortools_km"],
         "distancia_heuristica_km": comparacion["distancia_heuristica_km"],
     }
+
+
+@router.get(
+    "/{ruta_id}",
+    response_model=RutaOut,
+    dependencies=[
+        Depends(require_roles("municipalidad", "conductor"))
+    ],
+)
+def detalle_ruta(ruta_id: int, db: Session = Depends(get_db)):
+    ruta = (
+        db.query(Ruta)
+        .options(
+            joinedload(Ruta.camion),
+            selectinload(Ruta.paradas).joinedload(Parada.nodo),
+        )
+        .filter(Ruta.id == ruta_id)
+        .first()
+    )
+
+    if ruta is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ruta no encontrada",
+        )
+
+    return ruta
+
+
+@router.patch(
+    "/{ruta_id}",
+    response_model=RutaOut,
+)
+def actualizar_estado_ruta(
+    ruta_id: int,
+    datos: RutaEstadoUpdate,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    if usuario.rol not in {"municipalidad", "conductor"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para esta acción",
+        )
+
+    ruta = db.get(Ruta, ruta_id)
+
+    if ruta is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ruta no encontrada",
+        )
+
+    if usuario.rol == "conductor" and ruta.conductor_id != usuario.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta ruta no está asignada a ti",
+        )
+
+    ruta.estado = datos.estado
+    db.commit()
+    db.refresh(ruta)
+    return ruta
+
+
+@router.patch(
+    "/{ruta_id}/paradas/{parada_id}",
+    response_model=ParadaOut,
+)
+def actualizar_parada(
+    ruta_id: int,
+    parada_id: int,
+    datos: ParadaUpdate,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    if usuario.rol not in {"municipalidad", "conductor"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para esta acción",
+        )
+
+    ruta = db.get(Ruta, ruta_id)
+
+    if ruta is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ruta no encontrada",
+        )
+
+    if usuario.rol == "conductor" and ruta.conductor_id != usuario.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta ruta no está asignada a ti",
+        )
+
+    parada = (
+        db.query(Parada)
+        .filter(Parada.id == parada_id, Parada.ruta_id == ruta_id)
+        .first()
+    )
+
+    if parada is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Parada no encontrada",
+        )
+
+    parada.recolectado = datos.recolectado
+    db.commit()
+    db.refresh(parada)
+    return parada

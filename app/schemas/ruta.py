@@ -1,8 +1,10 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.camion import CamionOut
+from app.schemas.nodo import NodoOut
 
 
 class ParadaBaseCreate(BaseModel):
@@ -16,9 +18,18 @@ class RutaCreate(BaseModel):
     hora_inicio: datetime
     hora_fin: datetime
     camion_id: int = Field(gt=0)
+    conductor_id: int | None = Field(default=None, gt=0)
     paradas: list[ParadaBaseCreate] = Field(
         default_factory=list
     )
+
+
+class RutaEstadoUpdate(BaseModel):
+    estado: Literal["Pendiente", "en_proceso", "Completado", "Cancelado"]
+
+
+class ParadaUpdate(BaseModel):
+    recolectado: bool
 
 
 class ParadaOut(BaseModel):
@@ -26,6 +37,8 @@ class ParadaOut(BaseModel):
     ruta_id: int
     nodo_id: int
     orden: int
+    recolectado: bool = False
+    nodo: NodoOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,6 +50,7 @@ class RutaOut(BaseModel):
     hora_inicio: datetime
     hora_fin: datetime
     camion_id: int
+    conductor_id: int | None = None
     estado: str
     camion: CamionOut | None = None
     paradas: list[ParadaOut] = Field(
@@ -49,6 +63,7 @@ class RutaOut(BaseModel):
 class RutaGenerarRequest(BaseModel):
     fecha: date
     camion_id: int = Field(gt=0)
+    conductor_id: int | None = Field(default=None, gt=0)
     inicio_id: int | None = Field(default=None, gt=0)
 
 

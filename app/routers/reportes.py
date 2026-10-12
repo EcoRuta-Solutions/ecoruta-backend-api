@@ -14,7 +14,7 @@ router = APIRouter(prefix="/reportes", tags=["Reportes ciudadanos"])
 def crear_reporte(
     datos: ReporteCrear,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_roles("ciudadano")),
+    usuario: Usuario = Depends(require_roles("ciudadano", "conductor")),
 ):
     reporte = ReporteCiudadano(
         usuario_id=usuario.id,
