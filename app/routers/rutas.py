@@ -38,6 +38,33 @@ def _validar_conductor(db: Session, conductor_id: int | None) -> None:
         )
 
 
+_PRIORIDAD_POR_ESTADO = {
+    "critico": "Crítica",
+    "alerta": "Alta",
+    "normal": "Media",
+}
+
+
+def _enriquecer_llenado(db: Session, rutas: list[Ruta]) -> None:
+    """Adjunta el último llenado y la prioridad a cada nodo de las paradas.
+
+    Así el conductor ve, dentro de su ruta, qué porcentaje tiene cada
+    contenedor sin pedir un endpoint adicional por parada.
+    """
+    estados = {estado.id: estado for estado in obtener_estados(db)}
+
+    for ruta in rutas:
+        for parada in ruta.paradas:
+            nodo = parada.nodo
+            if nodo is None:
+                continue
+            estado = estados.get(nodo.id)
+            nodo.llenado = estado.fill_pct if estado else None
+            nodo.prioridad = (
+                _PRIORIDAD_POR_ESTADO.get(estado.estado) if estado else None
+            )
+
+
 @router.post(
     "",
     response_model=RutaOut,
@@ -116,6 +143,7 @@ def crear_ruta(
         db.rollback()
         raise
 
+    _enriquecer_llenado(db, [nueva_ruta])
     return nueva_ruta
 
 
@@ -135,7 +163,9 @@ def mis_rutas(
     if usuario.rol == "conductor":
         consulta = consulta.filter(Ruta.conductor_id == usuario.id)
 
-    return consulta.order_by(Ruta.id).all()
+    rutas = consulta.order_by(Ruta.id).all()
+    _enriquecer_llenado(db, rutas)
+    return rutas
 
 
 @router.get(
@@ -148,7 +178,7 @@ def mis_rutas(
 def rutas_del_dia(db: Session = Depends(get_db)):
     hoy = date.today()
 
-    return (
+    rutas = (
         db.query(Ruta)
         .options(
             joinedload(Ruta.camion),
@@ -158,6 +188,8 @@ def rutas_del_dia(db: Session = Depends(get_db)):
         .order_by(Ruta.id)
         .all()
     )
+    _enriquecer_llenado(db, rutas)
+    return rutas
 
 
 TURNOS_HORA_INICIO = {"mañana": 6, "manana": 6, "tarde": 14, "noche": 22}
@@ -291,6 +323,7 @@ def generar_ruta(
         db.rollback()
         raise
 
+    _enriquecer_llenado(db, [nueva_ruta])
     return {
         "ruta": nueva_ruta,
         "metodo": metodo,
@@ -324,6 +357,7 @@ def detalle_ruta(ruta_id: int, db: Session = Depends(get_db)):
             detail="Ruta no encontrada",
         )
 
+    _enriquecer_llenado(db, [ruta])
     return ruta
 
 
@@ -360,6 +394,7 @@ def actualizar_estado_ruta(
     ruta.estado = datos.estado
     db.commit()
     db.refresh(ruta)
+    _enriquecer_llenado(db, [ruta])
     return ruta
 
 

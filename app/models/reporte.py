@@ -8,6 +8,7 @@ from app.database import Base
 
 class EstadoReporte(str, Enum):
     PENDIENTE = "pendiente"
+    EN_ATENCION = "en_atencion"
     ATENDIDO = "atendido"
 
 
@@ -15,7 +16,8 @@ class ReporteCiudadano(Base):
     __tablename__ = "reportes_ciudadanos"
     __table_args__ = (
         CheckConstraint(
-            "estado IN ('pendiente', 'atendido')", name="ck_reportes_ciudadanos_estado"
+            "estado IN ('pendiente', 'en_atencion', 'atendido')",
+            name="ck_reportes_ciudadanos_estado",
         ),
     )
 
@@ -28,4 +30,5 @@ class ReporteCiudadano(Base):
     estado = Column(
         String(20), nullable=False, default=EstadoReporte.PENDIENTE.value, index=True
     )
+    asignado_a = Column(String(120), nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

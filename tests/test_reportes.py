@@ -40,8 +40,10 @@ def test_reporte_crear_rechaza_descripcion_demasiado_larga():
         ReporteCrear(latitud=0, longitud=0, descripcion="x" * 1001)
 
 
-def test_reporte_actualizar_solo_permite_atendido():
+def test_reporte_actualizar_solo_permite_estados_de_gestion():
     assert ReporteActualizar().estado == "atendido"
+    assert ReporteActualizar(estado="en_atencion").estado == "en_atencion"
+    assert ReporteActualizar(estado="atendido", asignado_a="Cuadrilla").asignado_a == "Cuadrilla"
     with pytest.raises(ValidationError):
         ReporteActualizar(estado="pendiente")
 

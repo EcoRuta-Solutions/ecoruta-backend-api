@@ -32,13 +32,25 @@ class ParadaUpdate(BaseModel):
     recolectado: bool
 
 
+class NodoParadaOut(NodoOut):
+    """Nodo con su última lectura, para mostrarlo dentro de una ruta.
+
+    `llenado` es el último fill_pct conocido y `prioridad` una etiqueta
+    legible derivada del estado (Crítica, Alta o Media). Ambos son None
+    cuando el nodo todavía no tiene lecturas.
+    """
+
+    llenado: float | None = None
+    prioridad: str | None = None
+
+
 class ParadaOut(BaseModel):
     id: int
     ruta_id: int
     nodo_id: int
     orden: int
     recolectado: bool = False
-    nodo: NodoOut | None = None
+    nodo: NodoParadaOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

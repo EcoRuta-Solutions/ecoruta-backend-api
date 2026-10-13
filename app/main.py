@@ -7,6 +7,7 @@ from app.core.security import decode_token
 from app.database import SessionLocal
 from app.models.usuario import Usuario
 from app.routers import camiones, rutas
+from app.routers import usuarios, flota, informes
 
 app = FastAPI(title="EcoRuta API")
 
@@ -25,6 +26,9 @@ app.include_router(panel.router)
 app.include_router(reportes.router)
 app.include_router(camiones.router)
 app.include_router(rutas.router)
+app.include_router(usuarios.router)
+app.include_router(flota.router)
+app.include_router(informes.router)
 
 
 @app.websocket("/ws/panel")

@@ -184,7 +184,8 @@ def test_schema_rechaza_fecha_invalida_y_camion_cero():
         RutaGenerarRequest(fecha=date(2026, 10, 9), camion_id=0)
 
 
-def test_rutas_del_dia_incluye_rutas_que_siguen_activas():
+def test_rutas_del_dia_incluye_rutas_que_siguen_activas(monkeypatch):
+    monkeypatch.setattr(rutas, "obtener_estados", lambda db: [])
     query = Mock()
     query.options.return_value = query
     query.filter.return_value = query
