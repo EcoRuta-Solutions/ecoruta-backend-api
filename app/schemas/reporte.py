@@ -14,7 +14,8 @@ class ReporteCrear(BaseModel):
 
 
 class ReporteActualizar(BaseModel):
-    estado: Literal["atendido"] = "atendido"
+    estado: Literal["en_atencion", "atendido"] = "atendido"
+    asignado_a: str | None = Field(default=None, max_length=120)
 
 
 class ReporteOut(BaseModel):
@@ -27,4 +28,5 @@ class ReporteOut(BaseModel):
     foto_url: str | None
     descripcion: str
     estado: EstadoReporte
+    asignado_a: str | None
     timestamp: datetime

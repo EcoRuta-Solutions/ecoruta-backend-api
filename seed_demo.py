@@ -5,16 +5,19 @@ que usa el panel municipalidad simulado, para que el usuario conductor vea
 información coherente desde la app real.
 """
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import text
 
 from app.database import SessionLocal
 from app.models.camion import Camion
+from app.models.conductor import Conductor
 from app.models.lectura import Lectura
 from app.models.nodo import Nodo
+from app.models.reporte import ReporteCiudadano
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
+from app.models.vehiculo import Vehiculo
 
 NODOS = [
     # codigo, nombre, lat, lon, fill_pct (None = sin lecturas), tilt
@@ -34,11 +37,53 @@ CAMIONES = [
     ("TCA-316", 8000, "Noche"),
 ]
 
+# placa, tipo, capacidad_toneladas, estado
+VEHICULOS = [
+    ("TCA-241", "Compactador", 8, "operativo"),
+    ("TCA-508", "Volquete", 6, "operativo"),
+    ("TCA-316", "Compactador", 8, "mantenimiento"),
+]
+
+# nombre, telefono, categoria_licencia, estado, vehiculo_idx (1-based), usa_conductor
+CONDUCTORES = [
+    ("Luis Rodríguez", "944 123 456", "A-IIb", "disponible", 1, True),
+    ("María Flores", "955 234 567", "A-IIIa", "en_ruta", 2, False),
+    ("José Castillo", "966 345 678", "A-IIb", "descanso", 3, False),
+]
+
 # camion_idx (1-based), nodos id (1-based, según orden de NODOS), estado, recolectadas
 RUTAS = [
     (1, [1, 2], "Pendiente", []),
     (2, [3, 5], "en_proceso", [3]),
     (3, [6, 7], "Completado", [6, 7]),
+]
+
+# descripcion, lat, lon, estado, asignado_a, dias_atras
+REPORTES = [
+    (
+        "Contenedor desbordado: hay residuos fuera del punto.",
+        -8.1116,
+        -79.0288,
+        "pendiente",
+        None,
+        0,
+    ),
+    (
+        "Basura acumulada en la esquina desde hace varios días.",
+        -8.1099,
+        -79.0310,
+        "en_atencion",
+        "Cuadrilla municipal",
+        3,
+    ),
+    (
+        "Contenedor dañado, la tapa está rota.",
+        -8.1110,
+        -79.0279,
+        "atendido",
+        "Cuadrilla municipal",
+        10,
+    ),
 ]
 
 
@@ -47,7 +92,8 @@ def main() -> None:
     try:
         db.execute(
             text(
-                "TRUNCATE TABLE paradas, rutas, lecturas, nodos, camiones "
+                "TRUNCATE TABLE paradas, rutas, lecturas, nodos, camiones, "
+                "conductores, vehiculos, reportes_ciudadanos "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -87,6 +133,33 @@ def main() -> None:
         if conductor is None:
             raise SystemExit("No hay ningún usuario con rol 'conductor'.")
 
+        vehiculos = []
+        for placa, tipo, capacidad, estado in VEHICULOS:
+            vehiculo = Vehiculo(
+                placa=placa,
+                tipo=tipo,
+                capacidad_toneladas=capacidad,
+                estado=estado,
+            )
+            db.add(vehiculo)
+            vehiculos.append(vehiculo)
+
+        db.flush()
+
+        for nombre, telefono, licencia, estado, vehiculo_idx, usa in CONDUCTORES:
+            db.add(
+                Conductor(
+                    usuario_id=conductor.id if usa else None,
+                    nombre=nombre,
+                    telefono=telefono,
+                    categoria_licencia=licencia,
+                    estado=estado,
+                    vehiculo_id=vehiculos[vehiculo_idx - 1].id,
+                )
+            )
+
+        db.flush()
+
         hoy = date.today()
         for camion_idx, nodos_ids, estado, recolectadas in RUTAS:
             ruta = Ruta(
@@ -111,10 +184,36 @@ def main() -> None:
                     )
                 )
 
+        ciudadano = (
+            db.query(Usuario).filter(Usuario.rol == "ciudadano").first()
+        )
+        reportes_creados = 0
+        if ciudadano is not None:
+            for descripcion, lat, lon, estado, asignado, dias in REPORTES:
+                db.add(
+                    ReporteCiudadano(
+                        usuario_id=ciudadano.id,
+                        latitud=lat,
+                        longitud=lon,
+                        descripcion=descripcion,
+                        estado=estado,
+                        asignado_a=asignado,
+                        timestamp=datetime.now(timezone.utc)
+                        - timedelta(days=dias),
+                    )
+                )
+                reportes_creados += 1
+
         db.commit()
 
         print(f"Nodos creados: {len(NODOS)}")
         print(f"Camiones creados: {len(CAMIONES)}")
+        print(f"Vehículos creados: {len(VEHICULOS)}")
+        print(f"Conductores creados: {len(CONDUCTORES)}")
+        if ciudadano is not None:
+            print(f"Reportes ciudadanos creados: {reportes_creados}")
+        else:
+            print("Reportes ciudadanos: no se creó ninguno (no hay usuario 'ciudadano').")
         print(f"Rutas creadas para el conductor '{conductor.nombre}' (id {conductor.id}):")
         for camion_idx, nodos_ids, estado, _ in RUTAS:
             print(f"  - camión {CAMIONES[camion_idx - 1][0]} · {estado} · {len(nodos_ids)} paradas")
