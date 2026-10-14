@@ -28,11 +28,6 @@ _ROL_BACKEND_A_PANEL = {
     "conductor": "operador",
     "ciudadano": "supervisor",
 }
-_ROL_PANEL_A_BACKEND = {
-    "administrador": "municipalidad",
-    "operador": "municipalidad",
-    "supervisor": "municipalidad",
-}
 
 
 def _a_usuario_panel(usuario: Usuario) -> UsuarioPanelOut:
@@ -152,8 +147,7 @@ def actualizar_usuario_panel(
         usuario.nombre = datos.nombre
     if datos.activo is not None:
         usuario.activo = datos.activo
-    if datos.rol is not None:
-        usuario.rol = _ROL_PANEL_A_BACKEND.get(datos.rol, usuario.rol)
+    # El rol se acepta en el cuerpo pero se ignora a propósito: no se cambia desde este endpoint.
     db.commit()
     db.refresh(usuario)
     return _a_usuario_panel(usuario)
