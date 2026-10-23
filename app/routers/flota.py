@@ -26,7 +26,6 @@ router = APIRouter(
 _ROL_BACKEND_A_PANEL = {
     "municipalidad": "administrador",
     "conductor": "operador",
-    "ciudadano": "supervisor",
 }
 
 

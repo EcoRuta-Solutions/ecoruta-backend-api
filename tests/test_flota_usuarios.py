@@ -30,7 +30,7 @@ def usuario(rol, nombre="Usuario de prueba", activo=True):
 
 @pytest.mark.parametrize(
     ("rol_actual", "rol_panel"),
-    [("conductor", "operador"), ("ciudadano", "supervisor")],
+    [("conductor", "operador"), ("municipalidad", "administrador")],
 )
 @pytest.mark.parametrize("rol_enviado", ["administrador", "operador", "supervisor"])
 def test_actualizar_usuario_no_modifica_el_rol(rol_actual, rol_panel, rol_enviado):
