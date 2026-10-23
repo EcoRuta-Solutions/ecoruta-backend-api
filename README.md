@@ -1,12 +1,12 @@
 # EcoRuta Backend API
 
-API FastAPI para gestionar nodos (contenedores), lecturas de sensores, usuarios, reportes ciudadanos y predicción de llenado de EcoRuta Trujillo. Usa SQLAlchemy con PostgreSQL/PostGIS (en Docker) y JWT para autenticar a las personas.
+API FastAPI para gestionar nodos (contenedores), lecturas de sensores, usuarios, camiones, rutas y predicción de llenado de EcoRuta Trujillo. Usa SQLAlchemy con PostgreSQL/PostGIS (en Docker) y JWT para autenticar a las personas.
 
 ## Reparto de partes
 
 | Parte | Tema | Responsable asignado | Rama | Estado |
 |---|---|---|---|---|
-| B | Reportes ciudadanos y roles | Anthony Mantilla | `feature/mantilla-reportes` | Implementada y probada |
+| B | Roles y protección de endpoints | Anthony Mantilla | `feature/mantilla-reportes` | Implementada y probada |
 | D | Predicción y tiempo real | Daniel | `feature/daniel-prediccion` | Implementada y probada |
 | A | Camiones y rutas | Diego | Otra rama | No incluida en este README |
 | C | Optimizador de rutas | Erwin | Otra rama | No incluida en este README |
@@ -38,14 +38,26 @@ uvicorn app.main:app --reload
 
 La documentación interactiva queda en `http://127.0.0.1:8000/docs` (botón **Authorize** para iniciar sesión).
 
-Para probar los endpoints protegidos hace falta un usuario por rol (`municipalidad`, `conductor`, `ciudadano`). `POST /auth/registro` solo crea ciudadanos; los otros roles se crean con el script de usuarios del equipo o directamente en la base.
+Solo hay dos roles: `municipalidad` y `conductor`. No existe registro público: los usuarios se crean con `python scripts/crear_usuarios_demo.py` (cuentas demo de ambos roles) o directamente en la base, siempre con el rol explícito.
+
+## Roles
+
+El rol `ciudadano` se eliminó: las denuncias ciudadanas las recibe SEGAT por Alerta SEGAT. Con él se retiraron `POST /auth/registro`, los endpoints `/reportes` y la tabla `reportes_ciudadanos`.
+
+Para retirar la tabla y las cuentas demo `ciudadano` de una base existente, saca primero un respaldo y luego:
+
+```powershell
+python scripts\eliminar_reportes_ciudadanos.py              # solo muestra lo que haría
+python scripts\eliminar_reportes_ciudadanos.py --confirmar  # ejecuta los cambios
+```
+
+El script borra la tabla y después solo las cuentas listadas en `CUENTAS_DEMO`; si quedan otros usuarios `ciudadano`, lo avisa para revisarlos a mano.
 
 ## Endpoints y protección
 
 | Método | Ruta | Quién puede usarlo | Parte |
 |---|---|---|---|
 | GET | `/` | Público | Base |
-| POST | `/auth/registro` | Público (crea siempre ciudadanos) | Base |
 | POST | `/auth/login` | Público | Base |
 | GET | `/auth/me` | Cualquier usuario con sesión válida | Base |
 | GET | `/nodos/` | `municipalidad`, `conductor` | B |
@@ -56,62 +68,43 @@ Para probar los endpoints protegidos hace falta un usuario por rol (`municipalid
 | GET | `/panel/estado` | `municipalidad`, `conductor` | B |
 | GET | `/panel/criticos` | `municipalidad`, `conductor` | B |
 | GET | `/panel/resumen` | `municipalidad`, `conductor` | B |
-| POST | `/reportes` | `ciudadano` | B |
-| GET | `/reportes` | `municipalidad` (filtro `estado`, `limit`, `offset`) | B |
-| PATCH | `/reportes/{id}` | `municipalidad` | B |
 | WebSocket | `/ws/panel` | JWT de usuario activo con rol `municipalidad` o `conductor` | D |
 
 Sin token la respuesta es 401, con un rol no autorizado 403, y con datos inválidos 422.
 
 ---
 
-# Parte B: Reportes ciudadanos y roles
+# Parte B: Roles y protección de endpoints
 
 **Responsable asignado:** Anthony Mantilla · **Rama:** `feature/mantilla-reportes`
 
-Los ciudadanos pueden reportar puntos críticos, y se cerró la protección por rol que faltaba en los endpoints de nodos, lecturas y panel.
+Se cerró la protección por rol que faltaba en los endpoints de nodos, lecturas y panel. Esta parte incluía también los reportes ciudadanos, que se retiraron después (ver [Roles](#roles)).
 
 ## Archivos agregados o modificados
 
 | Archivo | Estado | Qué hace |
 |---|---|---|
-| `app/models/reporte.py` | Nuevo | Define `ReporteCiudadano`, los estados `pendiente` y `atendido`, y la tabla `reportes_ciudadanos` con índices por usuario y estado. |
-| `app/schemas/reporte.py` | Nuevo | Valida los datos para crear, listar y actualizar reportes (coordenadas, URL, descripción, filtro de estado). |
-| `app/routers/reportes.py` | Nuevo | Crea reportes (ciudadano), los lista con filtro (municipalidad) y los marca como atendidos. |
-| `tests/test_reportes.py` | Nuevo | Pruebas con pytest de schemas, estado del PATCH, serialización de usuarios y `require_roles`, sin base de datos. |
+| `tests/test_deps.py` | Nuevo | Pruebas con pytest de `require_roles`, sin base de datos. |
 | `requirements-dev.txt` | Nuevo | Declara pytest como dependencia de desarrollo, separada de `requirements.txt`. |
-| `pruebas/ecoruta-reportes-thunder.json` | Nuevo | Colección importable de Thunder Client con casos de éxito, 401, 403 y 422, usando variables. |
-| `scripts/verificar_reportes_api.py` | Nuevo | Prueba la API por HTTP; genera los JWT desde la base, sin pedir contraseñas. |
-| `app/main.py` | Modificado | Importa e incluye el router de reportes. |
-| `crear_tablas.py` | Modificado | Importa el modelo nuevo para que `create_all` cree su tabla. |
 | `app/routers/nodos.py` | Modificado | `GET /nodos/` exige municipalidad o conductor; `POST /nodos/` exige municipalidad. |
 | `app/routers/lecturas.py` | Modificado | `POST /lecturas/` exige `X-API-Key`; el historial exige municipalidad o conductor. |
 | `app/routers/panel.py` | Modificado | Aplica municipalidad/conductor a las tres rutas del panel. |
-| `app/schemas/usuario.py` | Modificado | `UsuarioOut.email` pasó de `EmailStr` a `str` para poder responder con cuentas de prueba de dominio `.test`. El registro sigue validando con `EmailStr`. |
+| `app/schemas/usuario.py` | Modificado | `UsuarioOut.email` pasó de `EmailStr` a `str` para poder responder con cuentas de prueba de dominio `.test`. |
 | `simulador/simulador.py` | Modificado | Inicia sesión como municipalidad para registrar nodos y envía `X-API-Key` en cada lectura. |
 | `.env.example` | Modificado | Añade `SIMULADOR_EMAIL` y `SIMULADOR_PASSWORD` con valores de ejemplo. |
 
 ## Cómo encajan las piezas
 
-El ciudadano crea un reporte con `POST /reportes` y queda como `pendiente`. La municipalidad lo consulta, con filtro opcional por estado, en `GET /reportes` y lo marca como atendido con `PATCH /reportes/{id}`. Repetir el PATCH sobre un reporte ya atendido responde 200 sin cambios, y un id inexistente responde 404.
-
 Las personas usan sesión Bearer con permisos por rol. Los sensores no inician sesión: envían `X-API-Key`, por lo que **ya no existe el `POST /lecturas/` sin clave**. El simulador se adaptó: obtiene el token municipal desde `/auth/login` para registrar nodos y usa `DEVICE_API_KEY` al enviar lecturas.
 
 ## Ejecutar las pruebas
 
-Con el entorno virtual activo y la API y la base en marcha:
+Con el entorno virtual activo:
 
 ```powershell
 pip install -r requirements-dev.txt
 python -m pytest -q
-python scripts\verificar_reportes_api.py
 ```
-
-El script HTTP necesita `DATABASE_URL`, `SECRET_KEY`, `DEVICE_API_KEY` y `ECORUTA_API_URL` (por ejemplo `http://127.0.0.1:8000`). Deja un reporte y un nodo de prueba en la base local.
-
-## Colección de Thunder Client
-
-Importa `pruebas/ecoruta-reportes-thunder.json` con **Import**. Crea un Environment local con `baseUrl`, `municipalidadToken`, `conductorToken`, `ciudadanoToken`, `deviceApiKey`, `reporteId`, `nodoId`, `codigoNodoExistente` y `nuevoCodigo`. Obtén los tokens con `/auth/login` y guárdalos solo en el Environment local, nunca en el JSON. Ejecuta primero la creación del reporte para obtener `reporteId`.
 
 ## Variables del simulador
 
@@ -220,7 +213,7 @@ Las dos ramas salen del mismo `main` y modifican estos archivos. Al fusionar, ha
 
 | Archivo | Parte B | Parte D |
 |---|---|---|
-| `app/main.py` | Incluye el router `reportes` | Agrega la ruta `/ws/panel` |
+| `app/main.py` | Incluía el router `reportes` (ya eliminado) | Agrega la ruta `/ws/panel` |
 | `app/routers/lecturas.py` | `verify_device_key` en `POST /lecturas/` y `require_roles` en el historial | Eventos WebSocket tras guardar la lectura |
 | `app/routers/nodos.py` | `require_roles` en `GET` y `POST /nodos/` | Endpoint `GET /nodos/{id}/prediccion` |
 | `app/routers/panel.py` | Dependencia `require_roles` en el router | Usa `calcular_estado` compartido |
