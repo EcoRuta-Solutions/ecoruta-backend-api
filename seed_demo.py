@@ -5,7 +5,7 @@ que usa el panel municipalidad simulado, para que el usuario conductor vea
 información coherente desde la app real.
 """
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
 
 from sqlalchemy import text
 
@@ -14,7 +14,6 @@ from app.models.camion import Camion
 from app.models.conductor import Conductor
 from app.models.lectura import Lectura
 from app.models.nodo import Nodo
-from app.models.reporte import ReporteCiudadano
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
@@ -58,34 +57,6 @@ RUTAS = [
     (3, [6, 7], "Completado", [6, 7]),
 ]
 
-# descripcion, lat, lon, estado, asignado_a, dias_atras
-REPORTES = [
-    (
-        "Contenedor desbordado: hay residuos fuera del punto.",
-        -8.1116,
-        -79.0288,
-        "pendiente",
-        None,
-        0,
-    ),
-    (
-        "Basura acumulada en la esquina desde hace varios días.",
-        -8.1099,
-        -79.0310,
-        "en_atencion",
-        "Cuadrilla municipal",
-        3,
-    ),
-    (
-        "Contenedor dañado, la tapa está rota.",
-        -8.1110,
-        -79.0279,
-        "atendido",
-        "Cuadrilla municipal",
-        10,
-    ),
-]
-
 
 def main() -> None:
     db = SessionLocal()
@@ -93,7 +64,7 @@ def main() -> None:
         db.execute(
             text(
                 "TRUNCATE TABLE paradas, rutas, lecturas, nodos, camiones, "
-                "conductores, vehiculos, reportes_ciudadanos "
+                "conductores, vehiculos "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -184,36 +155,12 @@ def main() -> None:
                     )
                 )
 
-        ciudadano = (
-            db.query(Usuario).filter(Usuario.rol == "ciudadano").first()
-        )
-        reportes_creados = 0
-        if ciudadano is not None:
-            for descripcion, lat, lon, estado, asignado, dias in REPORTES:
-                db.add(
-                    ReporteCiudadano(
-                        usuario_id=ciudadano.id,
-                        latitud=lat,
-                        longitud=lon,
-                        descripcion=descripcion,
-                        estado=estado,
-                        asignado_a=asignado,
-                        timestamp=datetime.now(timezone.utc)
-                        - timedelta(days=dias),
-                    )
-                )
-                reportes_creados += 1
-
         db.commit()
 
         print(f"Nodos creados: {len(NODOS)}")
         print(f"Camiones creados: {len(CAMIONES)}")
         print(f"Vehículos creados: {len(VEHICULOS)}")
         print(f"Conductores creados: {len(CONDUCTORES)}")
-        if ciudadano is not None:
-            print(f"Reportes ciudadanos creados: {reportes_creados}")
-        else:
-            print("Reportes ciudadanos: no se creó ninguno (no hay usuario 'ciudadano').")
         print(f"Rutas creadas para el conductor '{conductor.nombre}' (id {conductor.id}):")
         for camion_idx, nodos_ids, estado, _ in RUTAS:
             print(f"  - camión {CAMIONES[camion_idx - 1][0]} · {estado} · {len(nodos_ids)} paradas")
