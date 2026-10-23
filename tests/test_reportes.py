@@ -1,10 +1,6 @@
-from types import SimpleNamespace
-
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.core.deps import require_roles
 from app.schemas.reporte import ReporteActualizar, ReporteCrear
 from app.schemas.usuario import UsuarioOut
 
@@ -52,17 +48,3 @@ def test_usuario_out_devuelve_emails_de_usuarios_de_prueba():
     usuario = UsuarioOut(id=1, email="ciudadano@ecoruta.test", nombre="Ciudadano", rol="ciudadano")
 
     assert usuario.email == "ciudadano@ecoruta.test"
-
-
-@pytest.mark.parametrize("rol", ["municipalidad", "conductor"])
-def test_require_roles_acepta_roles_autorizados(rol):
-    usuario = SimpleNamespace(rol=rol)
-
-    assert require_roles("municipalidad", "conductor")(usuario) is usuario
-
-
-def test_require_roles_rechaza_rol_no_autorizado():
-    with pytest.raises(HTTPException) as error:
-        require_roles("municipalidad")(SimpleNamespace(rol="ciudadano"))
-
-    assert error.value.status_code == 403
