@@ -9,5 +9,5 @@ class Usuario(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     nombre = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
-    rol = Column(String, nullable=False, default="ciudadano")
+    rol = Column(String, nullable=False)
     activo = Column(Boolean, nullable=False, default=True)

@@ -1,15 +1,14 @@
 """Crea (o restablece) los usuarios demo con una contraseña conocida.
 
-`POST /auth/registro` solo crea ciudadanos, así que para probar el panel
-municipal y la app del conductor hacen falta usuarios con otros roles. Este
-script los deja listos sin cambiar los ids de las cuentas existentes (las rutas
+No hay registro público: para probar el panel municipal y la app del
+conductor hacen falta usuarios con esos roles. Este script los deja listos
+sin cambiar los ids de las cuentas existentes (las rutas
 sembradas apuntan al conductor existente).
 
 Uso:
     python scripts/crear_usuarios_demo.py
 
 Credenciales resultantes (contraseña: demo1234):
-    user@example.com            ciudadano
     conductor@ecoruta.com       conductor
     municipalidad3@ecoruta.com  municipalidad
 """
@@ -26,7 +25,6 @@ from app.models.usuario import Usuario
 PASSWORD = "demo1234"
 
 CUENTAS = [
-    ("user@example.com", "Ciudadano Demo", "ciudadano"),
     ("conductor@ecoruta.com", "Conductor Demo", "conductor"),
     ("municipalidad3@ecoruta.com", "Municipalidad Demo", "municipalidad"),
 ]
