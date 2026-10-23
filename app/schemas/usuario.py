@@ -1,10 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
-
-class RegistroCiudadano(BaseModel):
-    email: EmailStr
-    nombre: str
-    password: str = Field(min_length=6, max_length=72)
+from pydantic import BaseModel, ConfigDict
 
 
 class UsuarioOut(BaseModel):
