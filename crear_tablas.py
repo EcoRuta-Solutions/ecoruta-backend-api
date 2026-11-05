@@ -7,6 +7,7 @@ from app.models.camion import Camion
 from app.models.ruta import Ruta, Parada
 from app.models.vehiculo import Vehiculo
 from app.models.conductor import Conductor
+from app.models.punto_critico import PuntoCritico
 
 Base.metadata.create_all(bind=engine)
 

@@ -8,6 +8,7 @@ from app.database import SessionLocal
 from app.models.usuario import Usuario
 from app.routers import camiones, rutas
 from app.routers import usuarios, flota, informes
+from app.routers import puntos_criticos
 
 app = FastAPI(title="EcoRuta API")
 
@@ -28,6 +29,7 @@ app.include_router(rutas.router)
 app.include_router(usuarios.router)
 app.include_router(flota.router)
 app.include_router(informes.router)
+app.include_router(puntos_criticos.router)
 
 
 @app.websocket("/ws/panel")

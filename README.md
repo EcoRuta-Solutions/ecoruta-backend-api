@@ -69,8 +69,33 @@ El script borra la tabla y después solo las cuentas listadas en `CUENTAS_DEMO`;
 | GET | `/panel/criticos` | `municipalidad`, `conductor` | B |
 | GET | `/panel/resumen` | `municipalidad`, `conductor` | B |
 | WebSocket | `/ws/panel` | JWT de usuario activo con rol `municipalidad` o `conductor` | D |
+| GET | `/puntos-criticos` | `municipalidad`, `conductor` | Datos reales |
+| GET | `/puntos-criticos/resumen` | `municipalidad`, `conductor` | Datos reales |
+| GET | `/puntos-criticos/{codigo}` | `municipalidad`, `conductor` | Datos reales |
 
 Sin token la respuesta es 401, con un rol no autorizado 403, y con datos inválidos 422.
+
+## Puntos críticos oficiales
+
+Son los 151 puntos críticos de acumulación de residuos del distrito de Trujillo (listado oficial, Tramo III), en `data/puntos_criticos_trujillo.csv`. No son contenedores ni tienen sensor: viven en su propia tabla `puntos_criticos` (geometría `POINT` SRID 4326 con índice GiST) y no se mezclan con `nodos`.
+
+Para importarlos, con la base levantada y el `.env` configurado:
+
+```powershell
+python scripts\importar_puntos_criticos.py
+python scripts\importar_puntos_criticos.py --archivo otra\ruta.csv  # otro CSV con las mismas columnas
+```
+
+El script crea la tabla si falta (también la crea `python crear_tablas.py`), valida cada fila (código, estado, priorización y que lat/lon caigan en Trujillo) y reporta las inválidas sin detenerse. Actualiza por código, así que puede correrse varias veces sin duplicar. Con el archivo oficial debe dar 151 puntos: 110 potenciales, 41 recuperados y 109 con priorización obligatoria.
+
+Endpoints (solo lectura):
+- `GET /puntos-criticos`: lista paginada (`limit` de 1 a 200, por defecto 50; `offset`). Filtros opcionales: `estado` (`potencial` o `recuperado`), `prioridad` (`true`/`false`) y `bbox=min_lon,min_lat,max_lon,max_lat`. Responde `{total, limit, offset, items}`; cada punto trae `lat` y `lon` numéricos.
+- `GET /puntos-criticos/resumen`: totales por estado y por prioridad.
+- `GET /puntos-criticos/{codigo}`: detalle por código (p. ej. `130101-1`); 404 si no existe.
+
+`seed_demo.py` no toca esta tabla: los nodos demo y los puntos críticos conviven.
+
+Las pruebas de puntos críticos usan una base aparte (`<tu_base>_test`, o la de `TEST_DATABASE_URL`), que se crea sola con PostGIS la primera vez; si PostgreSQL no está disponible, esas pruebas se saltan.
 
 ---
 
