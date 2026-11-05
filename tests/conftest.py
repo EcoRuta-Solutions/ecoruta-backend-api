@@ -18,23 +18,40 @@ from sqlalchemy.exc import OperationalError
 
 from app.config import DATABASE_URL
 from app.database import Base
+from app.models.camion import Camion
+from app.models.conductor import Conductor
+from app.models.lectura import Lectura
+from app.models.nodo import Nodo
 from app.models.punto_critico import PuntoCritico
+from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
+from app.models.vehiculo import Vehiculo
 
 
-def _cargar_importador():
-    """Carga scripts/importar_puntos_criticos.py (scripts/ no es un paquete)."""
-    ruta = Path(__file__).resolve().parents[1] / "scripts" / "importar_puntos_criticos.py"
-    spec = importlib.util.spec_from_file_location("importar_puntos_criticos", ruta)
+def _cargar_script(nombre):
+    """Carga scripts/<nombre>.py (scripts/ no es un paquete)."""
+    ruta = Path(__file__).resolve().parents[1] / "scripts" / f"{nombre}.py"
+    spec = importlib.util.spec_from_file_location(nombre, ruta)
     modulo = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = modulo
     spec.loader.exec_module(modulo)
     return modulo
 
 
-importador = _cargar_importador()
+importador = _cargar_script("importar_puntos_criticos")
+carga_flota = _cargar_script("cargar_flota_turnos")
 
-TABLAS_PRUEBA = [Usuario.__table__, PuntoCritico.__table__]
+TABLAS_PRUEBA = [
+    Usuario.__table__,
+    PuntoCritico.__table__,
+    Camion.__table__,
+    Nodo.__table__,
+    Lectura.__table__,
+    Ruta.__table__,
+    Parada.__table__,
+    Vehiculo.__table__,
+    Conductor.__table__,
+]
 
 CABECERA_CSV = [
     "codigo",
@@ -120,7 +137,10 @@ def engine_pruebas():
 def db_limpia(engine_pruebas):
     with engine_pruebas.begin() as conexion:
         conexion.execute(
-            text("TRUNCATE puntos_criticos, usuarios RESTART IDENTITY")
+            text(
+                "TRUNCATE puntos_criticos, usuarios, camiones, nodos, lecturas, "
+                "rutas, paradas, vehiculos, conductores RESTART IDENTITY CASCADE"
+            )
         )
     return engine_pruebas
 

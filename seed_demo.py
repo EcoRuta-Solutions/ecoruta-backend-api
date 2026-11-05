@@ -61,10 +61,26 @@ RUTAS = [
 def main() -> None:
     db = SessionLocal()
     try:
+        # Solo se borran los camiones demo (es_demo) y sus rutas/paradas; los
+        # camiones reales o provisionales (scripts/cargar_flota_turnos.py) se
+        # conservan. Requiere scripts/migrar_camiones_flota.py.
         db.execute(
             text(
-                "TRUNCATE TABLE paradas, rutas, lecturas, nodos, camiones, "
-                "conductores, vehiculos "
+                "DELETE FROM paradas WHERE ruta_id IN ("
+                "SELECT r.id FROM rutas r JOIN camiones c ON c.id = r.camion_id "
+                "WHERE c.es_demo)"
+            )
+        )
+        db.execute(
+            text(
+                "DELETE FROM rutas WHERE camion_id IN "
+                "(SELECT id FROM camiones WHERE es_demo)"
+            )
+        )
+        db.execute(text("DELETE FROM camiones WHERE es_demo"))
+        db.execute(
+            text(
+                "TRUNCATE TABLE lecturas, nodos, conductores, vehiculos "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -92,7 +108,13 @@ def main() -> None:
 
         camiones = []
         for placa, capacidad, turno in CAMIONES:
-            camion = Camion(placa=placa, capacidad=capacidad, turno=turno)
+            camion = Camion(
+                placa=placa,
+                capacidad=capacidad,
+                turno=turno,
+                estado="operativo",
+                es_demo=True,
+            )
             db.add(camion)
             camiones.append(camion)
 
