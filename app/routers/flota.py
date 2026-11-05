@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_roles
@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.conductor import Conductor
 from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
+from app.schemas.camion import ResumenFlotaOut
 from app.schemas.flota import (
     ConductorCreate,
     ConductorOut,
@@ -16,6 +17,7 @@ from app.schemas.flota import (
     VehiculoOut,
     VehiculoUpdate,
 )
+from app.services import flota_service
 
 router = APIRouter(
     prefix="/flota",
@@ -37,6 +39,17 @@ def _a_usuario_panel(usuario: Usuario) -> UsuarioPanelOut:
         rol=_ROL_BACKEND_A_PANEL.get(usuario.rol, "supervisor"),
         activo=usuario.activo,
     )
+
+
+@router.get("/resumen", response_model=ResumenFlotaOut)
+def resumen_flota(
+    incluir_demo: bool = Query(
+        default=True, description="Incluir los camiones demo de seed_demo.py"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Totales de la tabla `camiones` por turno y estado."""
+    return flota_service.resumen_flota(db, incluir_demo=incluir_demo)
 
 
 @router.get("/vehiculos", response_model=list[VehiculoOut])

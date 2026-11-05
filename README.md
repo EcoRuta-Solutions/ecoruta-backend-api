@@ -97,6 +97,41 @@ Endpoints (solo lectura):
 
 Las pruebas de puntos críticos usan una base aparte (`<tu_base>_test`, o la de `TEST_DATABASE_URL`), que se crea sola con PostGIS la primera vez; si PostgreSQL no está disponible, esas pruebas se saltan.
 
+## Flota y turnos (SEGAT)
+
+Turnos (`app/core/turnos.py`): `manana` 05:00–13:00, `tarde` 13:00–21:00 y `noche` 21:00–05:00 (cruza la medianoche). El inicio cuenta dentro del turno y el fin no: las 13:00 ya son tarde.
+
+La flota operativa es de 13 camiones en la mañana (más 3 en reserva para reemplazar a uno que falle), 8 en la tarde y 13 en la noche. Cada camión de la tabla `camiones` tiene `turno`, `estado` (`operativo`, `reserva` o `mantenimiento`), `capacidad_toneladas` (puede quedar vacía), `datos_confirmados` y `es_demo`.
+
+**Datos provisionales:** no hay placas reales y la capacidad no está confirmada. Los 37 camiones cargados usan códigos inventados (`CAM-M01`…`CAM-M13`, `CAM-R01`…`CAM-R03`, `CAM-T01`…`CAM-T08`, `CAM-N01`…`CAM-N13`), tienen `datos_confirmados=false` y la capacidad vacía.
+
+Para una base existente, primero se agregan las columnas (no borra datos y puede correrse varias veces) y después se carga la flota:
+
+```powershell
+python scripts\migrar_camiones_flota.py
+python scripts\cargar_flota_turnos.py
+python scripts\cargar_flota_turnos.py --capacidad-toneladas 12.5  # solo cuando haya un dato
+```
+
+- `cargar_flota_turnos.py` aplica la migración por su cuenta.
+- Si se corre otra vez, no duplica camiones ni cambia los estados que se hayan modificado desde la API.
+- Con `--capacidad-toneladas` se guarda además `capacidad` en kg (toneladas × 1000).
+- Al terminar, imprime cuántos camiones creó por turno y estado.
+
+`seed_demo.py` necesita la migración. Solo reemplaza sus 3 camiones demo (`es_demo=true`) y las rutas de esos camiones. No toca la flota provisional ni `puntos_criticos`.
+
+Endpoints:
+
+| Método | Ruta | Quién puede usarlo |
+|---|---|---|
+| GET | `/flota/resumen` | `municipalidad` |
+| GET | `/camiones` | `municipalidad`, `conductor` |
+| PATCH | `/camiones/{id}/estado` | `municipalidad` |
+
+- `GET /flota/resumen` da los totales por turno y por estado, cuántos son demo y cuántos tienen datos provisionales. Con `?incluir_demo=false` deja fuera los demo.
+- `GET /camiones` acepta los filtros opcionales `?turno=manana|tarde|noche` y `?estado=operativo|reserva|mantenimiento`. El filtro de turno también encuentra los demo, que se guardan como "Mañana". Sin filtros responde igual que antes, y cada camión trae ahora los campos nuevos.
+- `PATCH /camiones/{id}/estado` recibe un cuerpo como `{"estado": "mantenimiento", "activar_reserva": true}`. Con `activar_reserva`, la primera reserva del mismo turno pasa a `operativo`. Si no hay ninguna, responde 409 y no cambia nada. Si el camión no está operativo o el turno no es válido, responde 422.
+
 ---
 
 # Parte B: Roles y protección de endpoints
