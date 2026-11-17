@@ -33,7 +33,7 @@ Después:
 
 ```powershell
 python crear_tablas.py
-python scripts\migrar_es_demo.py   # base ya existente: agrega es_demo (create_all no agrega columnas)
+python scripts\migrar_unificar_flota.py   # base ya existente: agrega columnas nuevas (create_all no las agrega)
 uvicorn app.main:app --reload
 ```
 
@@ -157,30 +157,59 @@ Endpoints (solo lectura, roles `municipalidad` y `conductor`):
 - `GET /zonas-ruta`: todas las rutas ordenadas por turno y código. Acepta el filtro opcional `?turno=manana|mañana|tarde|noche` (422 si no es válido). En la respuesta el turno siempre sale como `manana`.
 - `GET /zonas-ruta/{codigo}`: detalle (p. ej. `N-9`); 404 si no existe.
 
-## Datos demo (seed y limpieza)
+## Flota unificada: `camiones` reemplaza a `vehiculos`
 
-Los datos demo llevan `es_demo=true` en `camiones`, `usuarios`, `rutas` y `nodos`. Las paradas son demo cuando su ruta lo es. Para agregar la columna en una base existente y marcar lo demo (no borra nada y puede correrse varias veces):
+La flota vive en una sola tabla, `camiones`. La tabla vieja `vehiculos` ya no se escribe desde la API y se quitará más adelante.
+
+Para preparar una base existente (no borra datos y puede correrse varias veces):
 
 ```powershell
-python scripts\migrar_es_demo.py
+python scripts\migrar_unificar_flota.py
+python scripts\vincular_conductores_camion.py
 ```
 
-Solo marca como demo `conductor@ecoruta.com` y `municipalidad3@ecoruta.com`, las rutas de camiones demo y los nodos `TRU-001`…`TRU-008`.
+- `migrar_unificar_flota.py` aplica también `migrar_es_demo.py` y `migrar_camiones_flota.py`. Hace estos cambios:
+  - `camiones`: agrega `tipo` y `activo`; `turno` ya admite null.
+  - `conductores`: agrega `camion_id` (FK a `camiones`) y `es_demo`.
+  - `vehiculos`: agrega `es_demo`; `capacidad_toneladas` admite null y pierde su valor por defecto (el 8 era inventado). Las filas existentes no cambian.
+- `vincular_conductores_camion.py` llena `conductores.camion_id` cruzando por placa con `vehiculos`. No pisa un `camion_id` ya asignado. **No crea camiones**: lista las placas de `vehiculos` que no existen en `camiones`, para que se confirmen y se carguen a mano.
+- En `camiones`, un valor vacío significa "por confirmar": `tipo`, `turno`, `capacidad_toneladas` y `capacidad`. La capacidad real está pendiente de SEGAT y no se inventa.
+
+Compatibilidad con el panel (sin cambios en el frontend):
+- `GET/POST /flota/vehiculos` y `PATCH /flota/vehiculos/{id}` leen y escriben sobre `camiones` y devuelven el mismo esquema (`id, placa, tipo, capacidad_toneladas, estado, activo`), más `turno`. Figuran como **deprecated** en OpenAPI.
+  - El `id` es el del camión.
+  - `tipo` y `capacidad_toneladas` pueden venir null.
+  - `estado` acepta `operativo`, `reserva` o `mantenimiento` (422 con otro valor).
+  - Si el POST no trae `turno`, el camión queda con turno null y `/flota/resumen` lo cuenta como sin turno reconocido.
+  - Con `capacidad_toneladas` se guarda también `capacidad` en kg (toneladas × 1000).
+- `/flota/conductores` valida `camion_id` contra `camiones` (404 si no existe).
+  - Sigue aceptando `vehiculo_id` como alias de `camion_id`: es el `id` que devuelve `/flota/vehiculos`. Si llegan los dos con valores distintos, responde 422.
+  - En la respuesta, `vehiculo_id` vale lo mismo que `camion_id`.
+
+## Datos demo (seed y limpieza)
+
+Los datos demo llevan `es_demo=true` en `camiones`, `usuarios`, `rutas`, `nodos`, `conductores` y `vehiculos`. Las paradas son demo cuando su ruta lo es. `scripts/migrar_unificar_flota.py` agrega todas esas columnas y marca solo esto:
+- usuarios: `conductor@ecoruta.com` y `municipalidad3@ecoruta.com`;
+- camiones y vehículos: `TCA-241`, `TCA-508` y `TCA-316`;
+- conductores: Luis Rodríguez, María Flores y José Castillo;
+- rutas: las de camiones demo;
+- nodos: `TRU-001`…`TRU-008`.
 
 `seed_demo.py`:
 - No corre si ya hay filas en `zonas_ruta` o `puntos_criticos`, salvo con `python seed_demo.py --force`.
-- Solo borra rutas demo con sus paradas, camiones demo y las lecturas de los nodos demo. Los nodos, vehículos y conductores demo se actualizan en su lugar. Nunca borra rutas ni paradas reales.
+- La flota demo vive solo en `camiones`: ya no crea filas en `vehiculos`. Los conductores demo quedan con `camion_id`.
+- Solo borra las rutas demo con sus paradas y las lecturas de los nodos demo. Los camiones, nodos y conductores demo se actualizan en su lugar. Nunca borra rutas ni paradas reales.
 
-`scripts/limpiar_datos_demo.py` borra solo filas con `es_demo=true`. Por defecto es un dry-run: ejecuta todo, muestra los números y deshace los cambios.
+`scripts/limpiar_datos_demo.py` borra solo filas con `es_demo=true`: rutas y paradas demo, conductores, camiones, vehículos, nodos (con sus lecturas) y usuarios. Por defecto es un dry-run: ejecuta todo, muestra los números y deshace los cambios.
 
 ```powershell
 python scripts\limpiar_datos_demo.py            # qué se borraría
 python scripts\limpiar_datos_demo.py --aplicar  # borra de verdad
 ```
 
-- No borra lo demo que todavía usa un dato real (por ejemplo un nodo demo en una parada real, o un usuario demo que figura en `conductores`). Lo reporta como bloqueado.
-- `vehiculos` y `conductores` no tienen `es_demo` y no se tocan. El script lista aparte las filas que coinciden con `seed_demo.py`.
-- Si falta la columna `es_demo` en alguna tabla, no borra nada y pide correr `scripts/migrar_es_demo.py`.
+- No borra lo demo que todavía usa un dato real. Por ejemplo: un camión demo asignado a un conductor real, un nodo demo en una parada real o un usuario demo vinculado a un conductor real. Lo reporta como bloqueado.
+- `conductor@ecoruta.com` se borra cuando se borra su conductor demo (Luis Rodríguez).
+- Si falta alguna columna (`es_demo` o `conductores.camion_id`), no borra nada y pide correr `scripts/migrar_unificar_flota.py`.
 
 ---
 

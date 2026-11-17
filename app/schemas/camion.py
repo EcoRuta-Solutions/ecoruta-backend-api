@@ -20,8 +20,10 @@ class CamionOut(BaseModel):
     capacidad: int | None = Field(
         default=None, description="Capacidad en kilogramos; null si no está confirmada"
     )
-    turno: str
+    turno: str | None = Field(default=None, description="null = turno por confirmar")
+    tipo: str | None = Field(default=None, description="null = por confirmar")
     capacidad_toneladas: float | None = None
+    activo: bool = True
     estado: EstadoCamion = EstadoCamion.operativo
     datos_confirmados: bool = False
     es_demo: bool = False

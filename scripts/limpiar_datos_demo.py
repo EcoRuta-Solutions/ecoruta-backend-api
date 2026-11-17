@@ -3,17 +3,18 @@ r"""Borra SOLO los datos demo (filas con es_demo = true). Dry-run por defecto.
 Qué borra (en este orden, dentro de una transacción):
 1. paradas de rutas demo (ruta con es_demo o de un camión demo);
 2. esas rutas demo;
-3. camiones con es_demo;
-4. nodos con es_demo y sus lecturas, salvo los que todavía usa una parada real;
-5. usuarios con es_demo, salvo los que todavía usa una ruta real o un conductor.
+3. conductores con es_demo;
+4. camiones con es_demo, salvo los que usa una ruta o un conductor real;
+5. vehículos con es_demo (tabla vieja), salvo los que usa un conductor real;
+6. nodos con es_demo y sus lecturas, salvo los que usa una parada real;
+7. usuarios con es_demo, salvo los que usa una ruta o un conductor real
+   (conductor@ecoruta.com se libera al borrarse su conductor demo).
 
 Lo que no puede borrarse sin tocar datos reales se reporta como "bloqueado".
-`vehiculos` y `conductores` no tienen es_demo: no se tocan y se listan aparte
-las filas que coinciden con seed_demo.py.
 
 Sin --aplicar ejecuta todo y hace ROLLBACK, así los números son exactos pero no
-cambia nada. Si falta la columna es_demo en alguna tabla, no borra nada y pide
-correr scripts/migrar_es_demo.py.
+cambia nada. Si falta alguna columna (es_demo, conductores.camion_id), no borra
+nada y pide correr scripts/migrar_unificar_flota.py.
 
 Uso:
     .\venv\Scripts\python.exe scripts\limpiar_datos_demo.py            # dry-run
@@ -31,12 +32,24 @@ sys.path.insert(0, str(RAIZ))
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-TABLAS_CON_ES_DEMO = ("camiones", "usuarios", "rutas", "nodos")
+COLUMNAS_REQUERIDAS = {
+    "camiones": ("es_demo",),
+    "usuarios": ("es_demo",),
+    "rutas": ("es_demo",),
+    "nodos": ("es_demo",),
+    "vehiculos": ("es_demo",),
+    "conductores": ("es_demo", "camion_id"),
+}
 
 RUTAS_DEMO = (
     "SELECT r.id FROM rutas r JOIN camiones c ON c.id = r.camion_id "
     "WHERE r.es_demo OR c.es_demo"
 )
+CAMION_EN_USO = (
+    "(EXISTS (SELECT 1 FROM rutas r WHERE r.camion_id = c.id) "
+    "OR EXISTS (SELECT 1 FROM conductores k WHERE k.camion_id = c.id))"
+)
+VEHICULO_EN_USO = "EXISTS (SELECT 1 FROM conductores k WHERE k.vehiculo_id = v.id)"
 NODO_EN_USO = "EXISTS (SELECT 1 FROM paradas p WHERE p.nodo_id = n.id)"
 USUARIO_EN_USO = (
     "(EXISTS (SELECT 1 FROM rutas r WHERE r.conductor_id = u.id) "
@@ -46,11 +59,9 @@ USUARIO_EN_USO = (
 BORRADOS = (
     ("paradas", f"DELETE FROM paradas WHERE ruta_id IN ({RUTAS_DEMO})"),
     ("rutas", f"DELETE FROM rutas WHERE id IN ({RUTAS_DEMO})"),
-    (
-        "camiones",
-        "DELETE FROM camiones c WHERE c.es_demo "
-        "AND NOT EXISTS (SELECT 1 FROM rutas r WHERE r.camion_id = c.id)",
-    ),
+    ("conductores", "DELETE FROM conductores WHERE es_demo"),
+    ("camiones", f"DELETE FROM camiones c WHERE c.es_demo AND NOT {CAMION_EN_USO}"),
+    ("vehiculos", f"DELETE FROM vehiculos v WHERE v.es_demo AND NOT {VEHICULO_EN_USO}"),
     (
         "lecturas",
         "DELETE FROM lecturas WHERE nodo_id IN "
@@ -60,32 +71,23 @@ BORRADOS = (
     ("usuarios", f"DELETE FROM usuarios u WHERE u.es_demo AND NOT {USUARIO_EN_USO}"),
 )
 
-# Se consultan después de borrar las rutas demo: lo que queda es real.
+# Se consultan después de los borrados: lo que todavía las usa es real.
 BLOQUEOS = {
-    "camiones": (
-        "SELECT c.placa FROM camiones c WHERE c.es_demo "
-        "AND EXISTS (SELECT 1 FROM rutas r WHERE r.camion_id = c.id) ORDER BY c.placa"
-    ),
-    "nodos": (
-        f"SELECT n.codigo FROM nodos n WHERE n.es_demo AND {NODO_EN_USO} "
-        "ORDER BY n.codigo"
-    ),
-    "usuarios": (
-        f"SELECT u.email FROM usuarios u WHERE u.es_demo AND {USUARIO_EN_USO} "
-        "ORDER BY u.email"
-    ),
+    "camiones": f"SELECT c.placa FROM camiones c WHERE c.es_demo AND {CAMION_EN_USO} ORDER BY c.placa",
+    "vehiculos": f"SELECT v.placa FROM vehiculos v WHERE v.es_demo AND {VEHICULO_EN_USO} ORDER BY v.placa",
+    "nodos": f"SELECT n.codigo FROM nodos n WHERE n.es_demo AND {NODO_EN_USO} ORDER BY n.codigo",
+    "usuarios": f"SELECT u.email FROM usuarios u WHERE u.es_demo AND {USUARIO_EN_USO} ORDER BY u.email",
 }
 
 
 class ColumnasFaltantes(RuntimeError):
-    def __init__(self, tablas: list[str]):
-        self.tablas = tablas
+    def __init__(self, faltantes: list[str]):
+        self.faltantes = faltantes
         super().__init__(
-            "Falta la columna es_demo en: "
-            + ", ".join(tablas)
-            + ". Corre primero scripts/migrar_es_demo.py "
-            "(ALTER TABLE <tabla> ADD COLUMN IF NOT EXISTS es_demo BOOLEAN NOT NULL "
-            "DEFAULT false). No se borró nada."
+            "Faltan columnas: "
+            + ", ".join(faltantes)
+            + ". Corre primero scripts/migrar_unificar_flota.py (agrega es_demo y "
+            "conductores.camion_id con ADD COLUMN IF NOT EXISTS). No se borró nada."
         )
 
 
@@ -94,43 +96,18 @@ class ResultadoLimpieza:
     aplicado: bool
     borradas: dict[str, int] = field(default_factory=dict)
     bloqueadas: dict[str, list[str]] = field(default_factory=dict)
-    # Filas demo de tablas sin es_demo (vehiculos, conductores): no se tocan.
-    sin_es_demo: dict[str, list[str]] = field(default_factory=dict)
 
 
 def columnas_faltantes(engine: Engine) -> list[str]:
     inspector = inspect(engine)
     faltan = []
-    for tabla in TABLAS_CON_ES_DEMO:
+    for tabla, requeridas in COLUMNAS_REQUERIDAS.items():
         if not inspector.has_table(tabla):
             faltan.append(f"{tabla} (no existe la tabla)")
             continue
         columnas = {c["name"] for c in inspector.get_columns(tabla)}
-        if "es_demo" not in columnas:
-            faltan.append(tabla)
+        faltan.extend(f"{tabla}.{c}" for c in requeridas if c not in columnas)
     return faltan
-
-
-def _demo_sin_es_demo(conexion) -> dict[str, list[str]]:
-    """Filas creadas por seed_demo.py en tablas que no tienen es_demo."""
-    from seed_demo import CONDUCTORES, VEHICULOS
-
-    placas = [placa for placa, *_ in VEHICULOS]
-    nombres = [nombre for nombre, *_ in CONDUCTORES]
-    return {
-        "vehiculos": list(
-            conexion.scalars(
-                text("SELECT placa FROM vehiculos WHERE placa = ANY(:p) ORDER BY placa"),
-                {"p": placas},
-            )
-        ),
-        "conductores": list(
-            conexion.scalars(
-                text("SELECT nombre FROM conductores WHERE nombre = ANY(:n) ORDER BY nombre"),
-                {"n": nombres},
-            )
-        ),
-    }
 
 
 def limpiar(engine: Engine, aplicar: bool = False) -> ResultadoLimpieza:
@@ -146,7 +123,6 @@ def limpiar(engine: Engine, aplicar: bool = False) -> ResultadoLimpieza:
                 resultado.borradas[tabla] = conexion.execute(text(sentencia)).rowcount
             for tabla, consulta in BLOQUEOS.items():
                 resultado.bloqueadas[tabla] = list(conexion.scalars(text(consulta)))
-            resultado.sin_es_demo = _demo_sin_es_demo(conexion)
         except Exception:
             transaccion.rollback()
             raise
@@ -178,17 +154,11 @@ def main(argv: list[str] | None = None) -> None:
     else:
         print("DRY-RUN (no se borró nada). Se borrarían:")
     for tabla, cantidad in resultado.borradas.items():
-        print(f"  {tabla:<9} {cantidad}")
+        print(f"  {tabla:<11} {cantidad}")
 
     if any(resultado.bloqueadas.values()):
         print("\nDemo que NO se puede borrar porque lo usan datos reales:")
         for tabla, filas in resultado.bloqueadas.items():
-            if filas:
-                print(f"  {tabla}: {', '.join(filas)}")
-
-    if any(resultado.sin_es_demo.values()):
-        print("\nDemo sin columna es_demo (fuera de alcance, no se toca):")
-        for tabla, filas in resultado.sin_es_demo.items():
             if filas:
                 print(f"  {tabla}: {', '.join(filas)}")
 

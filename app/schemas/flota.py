@@ -1,30 +1,55 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.turnos import normalizar_turno
+from app.models.camion import EstadoCamion
 
 
+def _validar_turno(valor: str | None) -> str | None:
+    """Acepta manana/mañana/tarde/noche y guarda el valor de Turno; None = por confirmar."""
+    if valor is None:
+        return None
+    turno = normalizar_turno(valor)
+    if turno is None:
+        raise ValueError("turno debe ser manana, tarde o noche")
+    return turno.value
+
+
+# /flota/vehiculos (obsoleto): mismo esquema de siempre, pero sobre la tabla `camiones`.
 class VehiculoBase(BaseModel):
     placa: str = Field(min_length=7, max_length=7)
-    tipo: str = Field(default="Compactador")
-    capacidad_toneladas: float = Field(default=8, gt=0)
-    estado: str = Field(default="operativo")
+    tipo: str | None = Field(default=None, description="null = por confirmar")
+    capacidad_toneladas: float | None = Field(
+        default=None, gt=0, description="null = por confirmar con SEGAT"
+    )
+    estado: EstadoCamion = EstadoCamion.operativo
     activo: bool = True
 
 
 class VehiculoCreate(VehiculoBase):
-    pass
+    turno: str | None = Field(
+        default=None, description="manana, tarde o noche; null = por confirmar"
+    )
+
+    _turno = field_validator("turno")(_validar_turno)
 
 
 class VehiculoUpdate(BaseModel):
     placa: str | None = Field(default=None, min_length=7, max_length=7)
     tipo: str | None = None
     capacidad_toneladas: float | None = Field(default=None, gt=0)
-    estado: str | None = None
+    estado: EstadoCamion | None = None
     activo: bool | None = None
+    turno: str | None = None
+
+    _turno = field_validator("turno")(_validar_turno)
 
 
 class VehiculoOut(VehiculoBase):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: int = Field(description="Id del camión (tabla camiones)")
+    estado: str
+    turno: str | None = None
 
 
 class ConductorBase(BaseModel):
@@ -32,7 +57,11 @@ class ConductorBase(BaseModel):
     telefono: str = ""
     categoria_licencia: str = "A-IIb"
     estado: str = "disponible"
-    vehiculo_id: int | None = None
+    camion_id: int | None = None
+    vehiculo_id: int | None = Field(
+        default=None,
+        description="Obsoleto: alias de camion_id (id que devuelve /flota/vehiculos)",
+    )
     activo: bool = True
 
 
@@ -45,7 +74,8 @@ class ConductorUpdate(BaseModel):
     telefono: str | None = None
     categoria_licencia: str | None = None
     estado: str | None = None
-    vehiculo_id: int | None = None
+    camion_id: int | None = None
+    vehiculo_id: int | None = Field(default=None, description="Obsoleto: alias de camion_id")
     activo: bool | None = None
 
 

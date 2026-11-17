@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_roles
 from app.database import get_db
+from app.models.camion import Camion
 from app.models.conductor import Conductor
 from app.models.usuario import Usuario
-from app.models.vehiculo import Vehiculo
 from app.schemas.camion import ResumenFlotaOut
 from app.schemas.flota import (
     ConductorCreate,
@@ -52,65 +52,129 @@ def resumen_flota(
     return flota_service.resumen_flota(db, incluir_demo=incluir_demo)
 
 
-@router.get("/vehiculos", response_model=list[VehiculoOut])
+# --- /flota/vehiculos (obsoleto) --------------------------------------------
+# Lee y escribe sobre `camiones` con el esquema de siempre. El id es el del camión.
+# El frontend debe pasar a /camiones; estos endpoints se quitarán más adelante.
+
+_NO_NULOS = ("placa", "estado", "activo")
+
+
+def _aplicar_capacidad(camion: Camion, toneladas: float | None) -> None:
+    """Guarda toneladas y kg (toneladas * 1000); None = por confirmar."""
+    camion.capacidad_toneladas = toneladas
+    camion.capacidad = round(toneladas * 1000) if toneladas is not None else None
+
+
+def _placa_ocupada(db: Session, placa: str) -> bool:
+    return db.query(Camion).filter(Camion.placa == placa).first() is not None
+
+
+@router.get("/vehiculos", response_model=list[VehiculoOut], deprecated=True)
 def listar_vehiculos(db: Session = Depends(get_db)):
-    return db.query(Vehiculo).order_by(Vehiculo.id).all()
+    return db.query(Camion).order_by(Camion.id).all()
 
 
-@router.post("/vehiculos", response_model=VehiculoOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/vehiculos",
+    response_model=VehiculoOut,
+    status_code=status.HTTP_201_CREATED,
+    deprecated=True,
+)
 def crear_vehiculo(datos: VehiculoCreate, db: Session = Depends(get_db)):
-    existe = db.query(Vehiculo).filter(Vehiculo.placa == datos.placa).first()
-    if existe:
+    if _placa_ocupada(db, datos.placa):
         raise HTTPException(status_code=409, detail="Ya existe un vehículo con esa placa")
 
-    vehiculo = Vehiculo(**datos.model_dump())
-    db.add(vehiculo)
+    camion = Camion(
+        placa=datos.placa,
+        tipo=datos.tipo,
+        turno=datos.turno,
+        estado=datos.estado.value,
+        activo=datos.activo,
+        datos_confirmados=False,
+        es_demo=False,
+    )
+    _aplicar_capacidad(camion, datos.capacidad_toneladas)
+    db.add(camion)
     db.commit()
-    db.refresh(vehiculo)
-    return vehiculo
+    db.refresh(camion)
+    return camion
 
 
-@router.patch("/vehiculos/{vehiculo_id}", response_model=VehiculoOut)
+@router.patch("/vehiculos/{vehiculo_id}", response_model=VehiculoOut, deprecated=True)
 def actualizar_vehiculo(
     vehiculo_id: int, datos: VehiculoUpdate, db: Session = Depends(get_db)
 ):
-    vehiculo = db.get(Vehiculo, vehiculo_id)
-    if vehiculo is None:
+    camion = db.get(Camion, vehiculo_id)
+    if camion is None:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
 
     cambios = datos.model_dump(exclude_unset=True)
-    placa = cambios.get("placa")
-    if placa and placa != vehiculo.placa:
-        duplicado = db.query(Vehiculo).filter(Vehiculo.placa == placa).first()
-        if duplicado:
-            raise HTTPException(
-                status_code=409, detail="Ya existe un vehículo con esa placa"
-            )
+    nulos = [campo for campo in _NO_NULOS if campo in cambios and cambios[campo] is None]
+    if nulos:
+        raise HTTPException(
+            status_code=422, detail=f"No pueden ser null: {', '.join(nulos)}"
+        )
 
+    placa = cambios.get("placa")
+    if placa and placa != camion.placa and _placa_ocupada(db, placa):
+        raise HTTPException(status_code=409, detail="Ya existe un vehículo con esa placa")
+
+    if "capacidad_toneladas" in cambios:
+        _aplicar_capacidad(camion, cambios.pop("capacidad_toneladas"))
+    if "estado" in cambios:
+        camion.estado = cambios.pop("estado").value
     for campo, valor in cambios.items():
-        setattr(vehiculo, campo, valor)
+        setattr(camion, campo, valor)
     db.commit()
-    db.refresh(vehiculo)
-    return vehiculo
+    db.refresh(camion)
+    return camion
+
+
+# --- /flota/conductores ------------------------------------------------------
+
+
+def _resolver_camion(db: Session, enviados: dict) -> tuple[bool, int | None]:
+    """Lee camion_id y su alias vehiculo_id. Devuelve (se envió, camion_id)."""
+    valores = {enviados[k] for k in ("camion_id", "vehiculo_id") if k in enviados}
+    if not valores:
+        return False, None
+    if len(valores) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="camion_id y vehiculo_id no coinciden (vehiculo_id es un alias de camion_id)",
+        )
+    camion_id = valores.pop()
+    if camion_id is not None and db.get(Camion, camion_id) is None:
+        raise HTTPException(status_code=404, detail="Camión no encontrado")
+    return True, camion_id
+
+
+def _a_conductor_out(conductor: Conductor) -> ConductorOut:
+    # vehiculo_id sale igual a camion_id (la columna vieja vehiculo_id ya no se expone).
+    return ConductorOut.model_validate(conductor).model_copy(
+        update={"vehiculo_id": conductor.camion_id}
+    )
 
 
 @router.get("/conductores", response_model=list[ConductorOut])
 def listar_conductores(db: Session = Depends(get_db)):
-    return db.query(Conductor).order_by(Conductor.id).all()
+    return [
+        _a_conductor_out(c) for c in db.query(Conductor).order_by(Conductor.id).all()
+    ]
 
 
 @router.post(
     "/conductores", response_model=ConductorOut, status_code=status.HTTP_201_CREATED
 )
 def crear_conductor(datos: ConductorCreate, db: Session = Depends(get_db)):
-    if datos.vehiculo_id is not None and db.get(Vehiculo, datos.vehiculo_id) is None:
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    _, camion_id = _resolver_camion(db, datos.model_dump(exclude_unset=True))
 
-    conductor = Conductor(**datos.model_dump())
+    campos = datos.model_dump(exclude={"camion_id", "vehiculo_id"})
+    conductor = Conductor(**campos, camion_id=camion_id)
     db.add(conductor)
     db.commit()
     db.refresh(conductor)
-    return conductor
+    return _a_conductor_out(conductor)
 
 
 @router.patch("/conductores/{conductor_id}", response_model=ConductorOut)
@@ -122,15 +186,17 @@ def actualizar_conductor(
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
 
     cambios = datos.model_dump(exclude_unset=True)
-    vehiculo_id = cambios.get("vehiculo_id")
-    if vehiculo_id is not None and db.get(Vehiculo, vehiculo_id) is None:
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    enviado, camion_id = _resolver_camion(db, cambios)
+    cambios.pop("camion_id", None)
+    cambios.pop("vehiculo_id", None)
+    if enviado:
+        conductor.camion_id = camion_id
 
     for campo, valor in cambios.items():
         setattr(conductor, campo, valor)
     db.commit()
     db.refresh(conductor)
-    return conductor
+    return _a_conductor_out(conductor)
 
 
 @router.get("/usuarios", response_model=list[UsuarioPanelOut])
