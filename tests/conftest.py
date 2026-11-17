@@ -23,6 +23,7 @@ from app.models.conductor import Conductor
 from app.models.lectura import Lectura
 from app.models.nodo import Nodo
 from app.models.punto_critico import PuntoCritico
+from app.models.reporte_campo import ReporteCampo
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
@@ -57,6 +58,7 @@ TABLAS_PRUEBA = [
     Vehiculo.__table__,
     Conductor.__table__,
     ZonaRuta.__table__,
+    ReporteCampo.__table__,
 ]
 
 CABECERA_CSV = [
@@ -145,7 +147,7 @@ def db_limpia(engine_pruebas):
         conexion.execute(
             text(
                 "TRUNCATE puntos_criticos, usuarios, camiones, nodos, lecturas, "
-                "rutas, paradas, vehiculos, conductores, zonas_ruta RESTART IDENTITY CASCADE"
+                "rutas, paradas, vehiculos, conductores, zonas_ruta, reportes_campo RESTART IDENTITY CASCADE"
             )
         )
     return engine_pruebas

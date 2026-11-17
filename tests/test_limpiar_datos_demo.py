@@ -1,7 +1,7 @@
 """scripts/limpiar_datos_demo.py: dry-run por defecto y solo borra lo marcado es_demo."""
 
 import pytest
-from conftest import carga_flota, limpieza_demo, migracion_flota
+from conftest import carga_flota, importador, limpieza_demo, migracion_flota
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
@@ -9,6 +9,8 @@ import seed_demo
 from app.models.camion import Camion
 from app.models.conductor import Conductor
 from app.models.nodo import Nodo
+from app.models.punto_critico import PuntoCritico
+from app.models.reporte_campo import ReporteCampo
 from app.models.ruta import Parada
 from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
@@ -73,6 +75,7 @@ def test_dry_run_no_borra_nada(base_con_demo, db_limpia):
 
     assert resultado.aplicado is False
     assert resultado.borradas == {
+        "reportes_campo": 0,
         "paradas": 6,
         "rutas": 3,
         "conductores": 3,
@@ -186,3 +189,38 @@ def test_sin_camion_id_en_conductores_no_borra_nada(base_con_demo, db_limpia):
         assert conteos(base_con_demo) == antes
     finally:
         migracion_flota.migrar(db_limpia)
+
+
+def agregar_reporte(Sesion, email, es_demo):
+    with Sesion() as db:
+        usuario = db.query(Usuario).filter(Usuario.email == email).one()
+        punto = db.query(PuntoCritico).first()
+        db.add(ReporteCampo(punto_critico_id=punto.id, usuario_id=usuario.id,
+                            estado="lleno", es_demo=es_demo))
+        db.commit()
+
+
+def test_reportes_demo_se_borran_y_liberan_al_usuario(base_con_demo, db_limpia, csv_prueba):
+    importador.importar(db_limpia, csv_prueba)
+    agregar_reporte(base_con_demo, "municipalidad3@ecoruta.com", es_demo=True)
+
+    resultado = limpieza_demo.limpiar(db_limpia, aplicar=True)
+
+    assert resultado.borradas["reportes_campo"] == 1
+    assert resultado.bloqueadas["usuarios"] == []
+    with base_con_demo() as db:
+        assert db.query(ReporteCampo).count() == 0
+        assert db.query(Usuario).filter(Usuario.email == "municipalidad3@ecoruta.com").count() == 0
+        assert db.query(PuntoCritico).count() == 4
+
+
+def test_reporte_real_de_usuario_demo_lo_bloquea(base_con_demo, db_limpia, csv_prueba):
+    importador.importar(db_limpia, csv_prueba)
+    agregar_reporte(base_con_demo, "municipalidad3@ecoruta.com", es_demo=False)
+
+    resultado = limpieza_demo.limpiar(db_limpia, aplicar=True)
+
+    assert resultado.borradas["reportes_campo"] == 0
+    assert resultado.bloqueadas["usuarios"] == ["municipalidad3@ecoruta.com"]
+    with base_con_demo() as db:
+        assert db.query(ReporteCampo).count() == 1

@@ -73,6 +73,10 @@ El script borra la tabla y después solo las cuentas listadas en `CUENTAS_DEMO`;
 | GET | `/puntos-criticos` | `municipalidad`, `conductor` | Datos reales |
 | GET | `/puntos-criticos/resumen` | `municipalidad`, `conductor` | Datos reales |
 | GET | `/puntos-criticos/{codigo}` | `municipalidad`, `conductor` | Datos reales |
+| GET | `/puntos-criticos/{codigo}/ultimo-reporte` | `municipalidad`, `conductor` | Datos reales |
+| POST | `/reportes-campo` | `municipalidad`, `conductor` | Datos reales |
+| GET | `/reportes-campo` | `municipalidad`, `conductor` | Datos reales |
+| GET | `/reportes-campo/resumen` | `municipalidad`, `conductor` | Datos reales |
 
 Sin token la respuesta es 401, con un rol no autorizado 403, y con datos inválidos 422.
 
@@ -97,6 +101,52 @@ Endpoints (solo lectura):
 `seed_demo.py` no toca esta tabla: los nodos demo y los puntos críticos conviven.
 
 Las pruebas de puntos críticos usan una base aparte (`<tu_base>_test`, o la de `TEST_DATABASE_URL`), que se crea sola con PostGIS la primera vez; si PostgreSQL no está disponible, esas pruebas se saltan.
+
+## Reportes de campo (llenado de puntos críticos)
+
+No existe ningún dato público del nivel de llenado de los puntos críticos. El dato real lo capturan en campo los conductores y la municipalidad, y vive en la tabla `reportes_campo`. **No hay valores supuestos ni lecturas simuladas**: un punto sin reporte vigente se muestra como `sin_datos`.
+
+La tabla la crea `python crear_tablas.py`, que no toca las tablas existentes. Cada reporte guarda:
+- el punto, el usuario (sale del token, nunca del cuerpo), el `estado` (`vacio`, `medio`, `lleno` o `desbordado`) y una `observacion` opcional;
+- la posición del dispositivo (`lat` y `lon`, opcionales), la `distancia_m` al punto (calculada con PostGIS) y `lejos_del_punto`;
+- `foto_url` (reservado para más adelante), `creado_en` y `es_demo`.
+
+Reglas:
+- Si el reporte trae `lat`/`lon` y está a más de `REPORTE_DISTANCIA_MAX_M` (150 m por defecto), se marca `lejos_del_punto=true`, **pero se guarda igual**. Sin GPS, `distancia_m` queda null y `lejos_del_punto` en false.
+- El estado de un punto es el de su **último** reporte, siempre que tenga menos de `REPORTE_VIGENCIA_HORAS` (24 h por defecto). Si no, el punto queda en `sin_datos`.
+- Los dos umbrales se cambian con variables de entorno del mismo nombre; se leen en `app/config.py`.
+- Un reporte enviado con una cuenta demo queda con `es_demo=true` y no cuenta como estado real. `GET /reportes-campo?incluir_demo=true` lo muestra para depurar.
+
+Endpoints (roles `municipalidad` y `conductor`):
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| POST | `/reportes-campo` | Registra un reporte (201). 404 si el punto no existe; 422 si el estado no es válido o llega `lat` sin `lon`. |
+| GET | `/reportes-campo` | Lista paginada, del más reciente al más antiguo: `?punto=<codigo>&desde=&hasta=&limit=&offset=`. |
+| GET | `/reportes-campo/resumen` | Puntos por estado según su último reporte vigente, y cuántos están `sin_datos`. |
+| GET | `/puntos-criticos/{codigo}/ultimo-reporte` | Último reporte del punto y si sigue vigente; 404 si el punto no existe. |
+
+Además, `GET /puntos-criticos` y `GET /puntos-criticos/{codigo}` traen ahora `ultimo_reporte` (`{estado, creado_en}` o null), `reporte_vigente` y `estado_llenado` (el estado vigente o `sin_datos`).
+
+Ejemplos en PowerShell (con un token de `/auth/login` en `$token`):
+
+```powershell
+$h = @{ Authorization = "Bearer $token" }
+
+# Reportar un punto (lat/lon y observacion son opcionales)
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/reportes-campo -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"codigo_punto": "130101-1", "estado": "lleno", "observacion": "Bolsas en la vereda", "lat": -8.0845, "lon": -79.0456}'
+
+# Últimos reportes de un punto en un rango de fechas
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/reportes-campo?punto=130101-1&desde=2026-11-01T00:00:00-05:00&limit=20" -Headers $h
+
+# Resumen para el panel y último reporte de un punto
+Invoke-RestMethod -Uri http://127.0.0.1:8000/reportes-campo/resumen -Headers $h
+Invoke-RestMethod -Uri http://127.0.0.1:8000/puntos-criticos/130101-1/ultimo-reporte -Headers $h
+```
+
+`scripts/limpiar_datos_demo.py` borra los reportes con `es_demo=true` antes que a los usuarios demo. No borra un usuario demo que tenga reportes reales.
 
 ## Flota y turnos (SEGAT)
 

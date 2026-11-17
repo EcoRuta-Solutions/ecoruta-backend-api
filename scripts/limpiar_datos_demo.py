@@ -1,14 +1,16 @@
 r"""Borra SOLO los datos demo (filas con es_demo = true). Dry-run por defecto.
 
 Qué borra (en este orden, dentro de una transacción):
-1. paradas de rutas demo (ruta con es_demo o de un camión demo);
-2. esas rutas demo;
-3. conductores con es_demo;
-4. camiones con es_demo, salvo los que usa una ruta o un conductor real;
-5. vehículos con es_demo (tabla vieja), salvo los que usa un conductor real;
-6. nodos con es_demo y sus lecturas, salvo los que usa una parada real;
-7. usuarios con es_demo, salvo los que usa una ruta o un conductor real
-   (conductor@ecoruta.com se libera al borrarse su conductor demo).
+1. reportes de campo con es_demo (los de cuentas demo);
+2. paradas de rutas demo (ruta con es_demo o de un camión demo);
+3. esas rutas demo;
+4. conductores con es_demo;
+5. camiones con es_demo, salvo los que usa una ruta o un conductor real;
+6. vehículos con es_demo (tabla vieja), salvo los que usa un conductor real;
+7. nodos con es_demo y sus lecturas, salvo los que usa una parada real;
+8. usuarios con es_demo, salvo los que usa una ruta, un conductor o un
+   reporte de campo real (conductor@ecoruta.com se libera al borrarse su
+   conductor demo).
 
 Lo que no puede borrarse sin tocar datos reales se reporta como "bloqueado".
 
@@ -39,6 +41,7 @@ COLUMNAS_REQUERIDAS = {
     "nodos": ("es_demo",),
     "vehiculos": ("es_demo",),
     "conductores": ("es_demo", "camion_id"),
+    "reportes_campo": ("es_demo",),
 }
 
 RUTAS_DEMO = (
@@ -53,10 +56,12 @@ VEHICULO_EN_USO = "EXISTS (SELECT 1 FROM conductores k WHERE k.vehiculo_id = v.i
 NODO_EN_USO = "EXISTS (SELECT 1 FROM paradas p WHERE p.nodo_id = n.id)"
 USUARIO_EN_USO = (
     "(EXISTS (SELECT 1 FROM rutas r WHERE r.conductor_id = u.id) "
-    "OR EXISTS (SELECT 1 FROM conductores k WHERE k.usuario_id = u.id))"
+    "OR EXISTS (SELECT 1 FROM conductores k WHERE k.usuario_id = u.id) "
+    "OR EXISTS (SELECT 1 FROM reportes_campo x WHERE x.usuario_id = u.id))"
 )
 
 BORRADOS = (
+    ("reportes_campo", "DELETE FROM reportes_campo WHERE es_demo"),
     ("paradas", f"DELETE FROM paradas WHERE ruta_id IN ({RUTAS_DEMO})"),
     ("rutas", f"DELETE FROM rutas WHERE id IN ({RUTAS_DEMO})"),
     ("conductores", "DELETE FROM conductores WHERE es_demo"),
@@ -84,9 +89,10 @@ class ColumnasFaltantes(RuntimeError):
     def __init__(self, faltantes: list[str]):
         self.faltantes = faltantes
         super().__init__(
-            "Faltan columnas: "
+            "Faltan tablas o columnas: "
             + ", ".join(faltantes)
-            + ". Corre primero scripts/migrar_unificar_flota.py (agrega es_demo y "
+            + ". Corre primero python crear_tablas.py (tablas nuevas, como "
+            "reportes_campo) y scripts/migrar_unificar_flota.py (agrega es_demo y "
             "conductores.camion_id con ADD COLUMN IF NOT EXISTS). No se borró nada."
         )
 
@@ -154,7 +160,7 @@ def main(argv: list[str] | None = None) -> None:
     else:
         print("DRY-RUN (no se borró nada). Se borrarían:")
     for tabla, cantidad in resultado.borradas.items():
-        print(f"  {tabla:<11} {cantidad}")
+        print(f"  {tabla:<14} {cantidad}")
 
     if any(resultado.bloqueadas.values()):
         print("\nDemo que NO se puede borrar porque lo usan datos reales:")

@@ -2,14 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import config
 from app.core.deps import require_roles
 from app.database import get_db
 from app.models.punto_critico import EstadoPuntoCritico, PuntoCritico
+from app.models.reporte_campo import ReporteCampo
 from app.schemas.punto_critico import (
     PuntoCriticoOut,
     PuntosCriticosPagina,
     ResumenPuntosCriticos,
 )
+from app.schemas.reporte_campo import (
+    ReporteCampoOut,
+    UltimoReporteBreve,
+    UltimoReportePuntoOut,
+)
+from app.services import reportes_service
 
 LIMITE_MAXIMO = 200
 
@@ -33,6 +41,30 @@ COLUMNAS = (
     PuntoCritico.norte_utm17s,
     PuntoCritico.creado_en,
 )
+
+
+def _consulta_puntos():
+    """Puntos con su último reporte de campo (LEFT JOIN: los no reportados también salen)."""
+    ultimo = reportes_service.ultimo_reporte_por_punto()
+    return select(
+        *COLUMNAS,
+        ultimo.c.estado.label("ultimo_estado"),
+        ultimo.c.creado_en.label("ultimo_creado_en"),
+    ).outerjoin(ultimo, ultimo.c.punto_critico_id == PuntoCritico.id)
+
+
+def _a_punto_out(fila, momento) -> PuntoCriticoOut:
+    datos = dict(fila._mapping)
+    estado = datos.pop("ultimo_estado")
+    creado_en = datos.pop("ultimo_creado_en")
+    return PuntoCriticoOut(
+        **datos,
+        ultimo_reporte=(
+            UltimoReporteBreve(estado=estado, creado_en=creado_en) if estado else None
+        ),
+        reporte_vigente=reportes_service.es_vigente(creado_en, momento),
+        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento),
+    )
 
 
 def parsear_bbox(bbox: str) -> tuple[float, float, float, float]:
@@ -83,18 +115,19 @@ def listar_puntos_criticos(
         select(func.count()).select_from(PuntoCritico).where(*filtros)
     )
     filas = db.execute(
-        select(*COLUMNAS)
+        _consulta_puntos()
         .where(*filtros)
         .order_by(PuntoCritico.id)
         .limit(limit)
         .offset(offset)
     ).all()
 
+    momento = reportes_service.ahora()
     return PuntosCriticosPagina(
         total=total,
         limit=limit,
         offset=offset,
-        items=[PuntoCriticoOut.model_validate(fila) for fila in filas],
+        items=[_a_punto_out(fila, momento) for fila in filas],
     )
 
 
@@ -129,7 +162,7 @@ def resumen_puntos_criticos(db: Session = Depends(get_db)):
 @router.get("/{codigo}", response_model=PuntoCriticoOut)
 def detalle_punto_critico(codigo: str, db: Session = Depends(get_db)):
     fila = db.execute(
-        select(*COLUMNAS).where(PuntoCritico.codigo_unico == codigo)
+        _consulta_puntos().where(PuntoCritico.codigo_unico == codigo)
     ).first()
 
     if fila is None:
@@ -138,4 +171,32 @@ def detalle_punto_critico(codigo: str, db: Session = Depends(get_db)):
             detail="Punto crítico no encontrado",
         )
 
-    return PuntoCriticoOut.model_validate(fila)
+    return _a_punto_out(fila, reportes_service.ahora())
+
+
+@router.get("/{codigo}/ultimo-reporte", response_model=UltimoReportePuntoOut)
+def ultimo_reporte_punto(codigo: str, db: Session = Depends(get_db)):
+    """Último reporte de campo (no demo) del punto y si sigue vigente."""
+    existe = db.scalar(
+        select(PuntoCritico.id).where(PuntoCritico.codigo_unico == codigo)
+    )
+    if existe is None:
+        raise HTTPException(status_code=404, detail="Punto crítico no encontrado")
+
+    fila = db.execute(
+        reportes_service.consulta_reportes()
+        .where(ReporteCampo.punto_critico_id == existe, ReporteCampo.es_demo.is_(False))
+        .order_by(ReporteCampo.creado_en.desc(), ReporteCampo.id.desc())
+        .limit(1)
+    ).first()
+
+    momento = reportes_service.ahora()
+    estado = fila.estado if fila else None
+    creado_en = fila.creado_en if fila else None
+    return UltimoReportePuntoOut(
+        codigo=codigo,
+        reporte_vigente=reportes_service.es_vigente(creado_en, momento),
+        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento),
+        vigencia_horas=config.REPORTE_VIGENCIA_HORAS,
+        reporte=ReporteCampoOut.model_validate(fila) if fila else None,
+    )
