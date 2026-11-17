@@ -8,6 +8,7 @@ from app.models.ruta import Ruta, Parada
 from app.models.vehiculo import Vehiculo
 from app.models.conductor import Conductor
 from app.models.punto_critico import PuntoCritico
+from app.models.zona_ruta import ZonaRuta
 
 Base.metadata.create_all(bind=engine)
 

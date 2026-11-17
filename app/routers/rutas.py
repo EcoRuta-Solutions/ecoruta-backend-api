@@ -1,9 +1,10 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.deps import get_current_user, require_roles
+from app.core.turnos import normalizar_turno
 from app.database import get_db
 from app.models.camion import Camion
 from app.models.nodo import Nodo
@@ -192,10 +193,6 @@ def rutas_del_dia(db: Session = Depends(get_db)):
     return rutas
 
 
-TURNOS_HORA_INICIO = {"mañana": 6, "manana": 6, "tarde": 14, "noche": 22}
-DURACION_TURNO = timedelta(hours=8)
-
-
 @router.post(
     "/generar",
     response_model=RutaGenerarOut,
@@ -216,16 +213,19 @@ def generar_ruta(
 
     _validar_conductor(db, datos.conductor_id)
 
-    hora = TURNOS_HORA_INICIO.get(camion.turno.strip().lower())
+    turno = normalizar_turno(camion.turno)
 
-    if hora is None:
+    if turno is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="El camión tiene un turno inválido",
         )
 
-    hora_inicio = datetime.combine(datos.fecha, time(hour=hora))
-    hora_fin = hora_inicio + DURACION_TURNO
+    # Horario del turno según app/core/turnos.py; la noche termina al día siguiente.
+    hora_inicio = datetime.combine(datos.fecha, turno.inicio)
+    hora_fin = datetime.combine(datos.fecha, turno.fin)
+    if turno.cruza_medianoche:
+        hora_fin += timedelta(days=1)
 
     existente = (
         db.query(Ruta)

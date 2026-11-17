@@ -17,9 +17,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from migrar_es_demo import migrar
 
 from app.core.security import hash_password
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.models.usuario import Usuario
 
 PASSWORD = "demo1234"
@@ -31,6 +34,7 @@ CUENTAS = [
 
 
 def main() -> None:
+    migrar(engine)  # columna usuarios.es_demo
     db = SessionLocal()
     try:
         for email, nombre, rol in CUENTAS:
@@ -42,6 +46,7 @@ def main() -> None:
                     password_hash=hash_password(PASSWORD),
                     rol=rol,
                     activo=True,
+                    es_demo=True,
                 )
                 db.add(usuario)
                 print(f"Creado: {email} ({rol})")
@@ -49,6 +54,7 @@ def main() -> None:
                 usuario.password_hash = hash_password(PASSWORD)
                 usuario.rol = rol
                 usuario.activo = True
+                usuario.es_demo = True
                 print(f"Actualizado: {email} ({rol}, id {usuario.id})")
         db.commit()
     finally:

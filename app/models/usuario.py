@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, false
 from app.database import Base
 
 
@@ -11,3 +11,5 @@ class Usuario(Base):
     password_hash = Column(String, nullable=False)
     rol = Column(String, nullable=False)
     activo = Column(Boolean, nullable=False, default=True)
+    # True para las cuentas de scripts/crear_usuarios_demo.py.
+    es_demo = Column(Boolean, nullable=False, default=False, server_default=false())

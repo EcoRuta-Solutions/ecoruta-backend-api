@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -113,8 +113,24 @@ def test_generar_ruta_turno_noche_termina_al_dia_siguiente(estados):
     rutas.generar_ruta(peticion(), db=db)
 
     guardada = [o for o in db.agregados if isinstance(o, Ruta)][0]
-    assert guardada.hora_inicio.hour == 22
+    assert guardada.hora_inicio == datetime(2026, 10, 9, 21)
+    assert guardada.hora_fin == datetime(2026, 10, 10, 5)
     assert guardada.fecha_fin == date(2026, 10, 10)
+
+
+@pytest.mark.parametrize(
+    ("turno", "inicio", "fin"),
+    [("Mañana", 5, 13), ("manana", 5, 13), ("Tarde", 13, 21), ("tarde", 13, 21)],
+)
+def test_generar_ruta_usa_horario_de_turnos(estados, turno, inicio, fin):
+    db = FakeDB(camion=camion(turno))
+
+    rutas.generar_ruta(peticion(), db=db)
+
+    guardada = [o for o in db.agregados if isinstance(o, Ruta)][0]
+    assert guardada.hora_inicio == datetime(2026, 10, 9, inicio)
+    assert guardada.hora_fin == datetime(2026, 10, 9, fin)
+    assert guardada.fecha_fin == date(2026, 10, 9)
 
 
 def test_generar_ruta_un_solo_nodo_critico(monkeypatch):
