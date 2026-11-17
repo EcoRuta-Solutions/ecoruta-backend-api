@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.punto_critico import EstadoPuntoCritico
+from app.schemas.reporte_campo import EstadoLlenado, UltimoReporteBreve
 
 
 class PuntoCriticoOut(BaseModel):
@@ -19,6 +20,12 @@ class PuntoCriticoOut(BaseModel):
     este_utm17s: int | None
     norte_utm17s: int | None
     creado_en: datetime
+    # Del último reporte de campo (no demo); null si nunca se reportó.
+    ultimo_reporte: UltimoReporteBreve | None = None
+    # True si el último reporte tiene menos de REPORTE_VIGENCIA_HORAS.
+    reporte_vigente: bool = False
+    # Estado del último reporte vigente, o "sin_datos": nunca un valor supuesto.
+    estado_llenado: EstadoLlenado = "sin_datos"
 
 
 class PuntosCriticosPagina(BaseModel):

@@ -9,6 +9,7 @@ from app.models.vehiculo import Vehiculo
 from app.models.conductor import Conductor
 from app.models.punto_critico import PuntoCritico
 from app.models.zona_ruta import ZonaRuta
+from app.models.reporte_campo import ReporteCampo
 
 Base.metadata.create_all(bind=engine)
 
