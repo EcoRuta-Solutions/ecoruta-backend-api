@@ -33,6 +33,7 @@ Después:
 
 ```powershell
 python crear_tablas.py
+python scripts\migrar_es_demo.py   # base ya existente: agrega es_demo (create_all no agrega columnas)
 uvicorn app.main:app --reload
 ```
 
@@ -118,7 +119,9 @@ python scripts\cargar_flota_turnos.py --capacidad-toneladas 12.5  # solo cuando 
 - Con `--capacidad-toneladas` se guarda además `capacidad` en kg (toneladas × 1000).
 - Al terminar, imprime cuántos camiones creó por turno y estado.
 
-`seed_demo.py` necesita la migración. Solo reemplaza sus 3 camiones demo (`es_demo=true`) y las rutas de esos camiones. No toca la flota provisional ni `puntos_criticos`.
+`seed_demo.py` solo reemplaza lo demo (ver [Datos demo](#datos-demo-seed-y-limpieza)). No toca la flota provisional ni `puntos_criticos`.
+
+`POST /rutas/generar` usa el horario del turno del camión según `app/core/turnos.py` (05:00–13:00, 13:00–21:00 y 21:00–05:00 del día siguiente).
 
 Endpoints:
 
@@ -131,6 +134,53 @@ Endpoints:
 - `GET /flota/resumen` da los totales por turno y por estado, cuántos son demo y cuántos tienen datos provisionales. Con `?incluir_demo=false` deja fuera los demo.
 - `GET /camiones` acepta los filtros opcionales `?turno=manana|tarde|noche` y `?estado=operativo|reserva|mantenimiento`. El filtro de turno también encuentra los demo, que se guardan como "Mañana". Sin filtros responde igual que antes, y cada camión trae ahora los campos nuevos.
 - `PATCH /camiones/{id}/estado` recibe un cuerpo como `{"estado": "mantenimiento", "activar_reserva": true}`. Con `activar_reserva`, la primera reserva del mismo turno pasa a `operativo`. Si no hay ninguna, responde 409 y no cambia nada. Si el camión no está operativo o el turno no es válido, responde 422.
+
+## Rutas por zona
+
+Son las rutas de recolección por zona de Trujillo (`M-1`, `T-3`, `N-9`…), con su turno, tramo, sectores, horario de recojo y horario para sacar la basura. Viven en la tabla `zonas_ruta`.
+
+**El CSV oficial todavía no está en el repo.** Va en `data/rutas_zona_trujillo.csv` con las columnas `ruta, turno, tramo, sectores, recojo_inicio, recojo_fin, sacar_basura_inicio, sacar_basura_fin` y, opcionalmente, `revisar` (`true`/`false`). Las horas van en formato 24 h (`HH:MM`; `24:00` se guarda como `00:00`). Mientras falte, el importador termina con un error claro y no toca la base.
+
+```powershell
+python crear_tablas.py                      # crea zonas_ruta (también la crea el importador)
+python scripts\importar_rutas_zona.py
+python scripts\importar_rutas_zona.py --archivo otra\ruta.csv
+```
+
+- `turno` acepta `manana`, `mañana`, `tarde` o `noche` y se guarda como `manana|tarde|noche`.
+- `cruza_medianoche` se calcula: es `true` si el recojo termina después de las 00:00 (por ejemplo 21:00–05:00). Terminar justo a las 24:00 no cuenta.
+- `revisar=true` marca datos dudosos. Se activa si el CSV lo pide o si la ruta está en `CODIGOS_REVISAR` del script. Hoy esa lista solo tiene `N-9`, que tiene impreso un hueco 23:00–24:00 y se importa tal cual.
+- No se inventan datos: lo que el CSV no trae (tramo, sectores, horario para sacar la basura) queda vacío.
+- Actualiza por código de ruta, así que puede correrse varias veces sin duplicar. Al final imprime el total, la cantidad por turno y cuántas rutas están por revisar.
+
+Endpoints (solo lectura, roles `municipalidad` y `conductor`):
+- `GET /zonas-ruta`: todas las rutas ordenadas por turno y código. Acepta el filtro opcional `?turno=manana|mañana|tarde|noche` (422 si no es válido). En la respuesta el turno siempre sale como `manana`.
+- `GET /zonas-ruta/{codigo}`: detalle (p. ej. `N-9`); 404 si no existe.
+
+## Datos demo (seed y limpieza)
+
+Los datos demo llevan `es_demo=true` en `camiones`, `usuarios`, `rutas` y `nodos`. Las paradas son demo cuando su ruta lo es. Para agregar la columna en una base existente y marcar lo demo (no borra nada y puede correrse varias veces):
+
+```powershell
+python scripts\migrar_es_demo.py
+```
+
+Solo marca como demo `conductor@ecoruta.com` y `municipalidad3@ecoruta.com`, las rutas de camiones demo y los nodos `TRU-001`…`TRU-008`.
+
+`seed_demo.py`:
+- No corre si ya hay filas en `zonas_ruta` o `puntos_criticos`, salvo con `python seed_demo.py --force`.
+- Solo borra rutas demo con sus paradas, camiones demo y las lecturas de los nodos demo. Los nodos, vehículos y conductores demo se actualizan en su lugar. Nunca borra rutas ni paradas reales.
+
+`scripts/limpiar_datos_demo.py` borra solo filas con `es_demo=true`. Por defecto es un dry-run: ejecuta todo, muestra los números y deshace los cambios.
+
+```powershell
+python scripts\limpiar_datos_demo.py            # qué se borraría
+python scripts\limpiar_datos_demo.py --aplicar  # borra de verdad
+```
+
+- No borra lo demo que todavía usa un dato real (por ejemplo un nodo demo en una parada real, o un usuario demo que figura en `conductores`). Lo reporta como bloqueado.
+- `vehiculos` y `conductores` no tienen `es_demo` y no se tocan. El script lista aparte las filas que coinciden con `seed_demo.py`.
+- Si falta la columna `es_demo` en alguna tabla, no borra nada y pide correr `scripts/migrar_es_demo.py`.
 
 ---
 

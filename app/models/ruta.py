@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Date, DateTime, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, Date, DateTime, ForeignKey, false
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -13,6 +13,8 @@ class Ruta(Base):
     camion_id = Column(Integer, ForeignKey("camiones.id"), nullable=False)
     conductor_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     estado = Column(String, nullable=False) # Pendiente, en_proceso, Completado, Cancelado
+    # True para las rutas de seed_demo.py (y las de camiones demo).
+    es_demo = Column(Boolean, nullable=False, default=False, server_default=false())
 
     camion = relationship("Camion")
     conductor = relationship("Usuario")

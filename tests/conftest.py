@@ -26,6 +26,7 @@ from app.models.punto_critico import PuntoCritico
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
+from app.models.zona_ruta import ZonaRuta
 
 
 def _cargar_script(nombre):
@@ -40,6 +41,9 @@ def _cargar_script(nombre):
 
 importador = _cargar_script("importar_puntos_criticos")
 carga_flota = _cargar_script("cargar_flota_turnos")
+importador_zonas = _cargar_script("importar_rutas_zona")
+migracion_demo = _cargar_script("migrar_es_demo")
+limpieza_demo = _cargar_script("limpiar_datos_demo")
 
 TABLAS_PRUEBA = [
     Usuario.__table__,
@@ -51,6 +55,7 @@ TABLAS_PRUEBA = [
     Parada.__table__,
     Vehiculo.__table__,
     Conductor.__table__,
+    ZonaRuta.__table__,
 ]
 
 CABECERA_CSV = [
@@ -139,7 +144,7 @@ def db_limpia(engine_pruebas):
         conexion.execute(
             text(
                 "TRUNCATE puntos_criticos, usuarios, camiones, nodos, lecturas, "
-                "rutas, paradas, vehiculos, conductores RESTART IDENTITY CASCADE"
+                "rutas, paradas, vehiculos, conductores, zonas_ruta RESTART IDENTITY CASCADE"
             )
         )
     return engine_pruebas
