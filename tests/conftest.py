@@ -44,6 +44,7 @@ carga_flota = _cargar_script("cargar_flota_turnos")
 importador_zonas = _cargar_script("importar_rutas_zona")
 migracion_demo = _cargar_script("migrar_es_demo")
 limpieza_demo = _cargar_script("limpiar_datos_demo")
+migracion_flota = _cargar_script("migrar_unificar_flota")
 
 TABLAS_PRUEBA = [
     Usuario.__table__,

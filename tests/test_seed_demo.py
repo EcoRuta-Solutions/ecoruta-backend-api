@@ -10,11 +10,13 @@ from sqlalchemy.orm import sessionmaker
 
 import seed_demo
 from app.models.camion import Camion
+from app.models.conductor import Conductor
 from app.models.lectura import Lectura
 from app.models.nodo import Nodo
 from app.models.punto_critico import PuntoCritico
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
+from app.models.vehiculo import Vehiculo
 from test_importar_rutas_zona import CABECERA, FILAS_PRUEBA
 
 
@@ -151,3 +153,41 @@ def test_codigos_demo_de_la_migracion_coinciden_con_seed():
     assert {codigo for codigo, *_ in seed_demo.NODOS} == set(
         migracion_demo.CODIGOS_NODOS_DEMO
     )
+
+
+# --- Flota demo solo en camiones ---------------------------------------------------
+
+
+def test_no_crea_vehiculos_y_conductores_usan_camion(sesion):
+    seed_demo.main([])
+    with sesion() as db:
+        ids_antes = {c.placa: c.id for c in db.query(Camion).filter(Camion.es_demo.is_(True))}
+
+    seed_demo.main([])  # segunda corrida: actualiza en su lugar
+
+    with sesion() as db:
+        assert db.query(Vehiculo).count() == 0
+        demo = {c.placa: c for c in db.query(Camion).filter(Camion.es_demo.is_(True))}
+        assert {p: c.id for p, c in demo.items()} == ids_antes  # mismos ids
+        assert demo["TCA-508"].tipo == "Volquete"
+        conductores = {k.nombre: k for k in db.query(Conductor)}
+        assert set(conductores) == {"Luis Rodríguez", "María Flores", "José Castillo"}
+        assert all(k.es_demo for k in conductores.values())
+        assert all(k.vehiculo_id is None for k in conductores.values())
+        assert conductores["Luis Rodríguez"].camion_id == demo["TCA-241"].id
+        assert conductores["José Castillo"].camion_id == demo["TCA-316"].id
+
+
+def test_conductor_real_en_camion_demo_no_rompe_el_seed(sesion):
+    seed_demo.main([])
+    with sesion() as db:
+        camion_demo = db.query(Camion).filter(Camion.placa == "TCA-241").one()
+        db.add(Conductor(nombre="Conductora Real", camion_id=camion_demo.id))
+        db.commit()
+
+    seed_demo.main([])  # antes borraba los camiones demo: aquí fallaría la FK
+
+    with sesion() as db:
+        real = db.query(Conductor).filter(Conductor.nombre == "Conductora Real").one()
+        assert real.es_demo is False
+        assert db.get(Camion, real.camion_id).placa == "TCA-241"

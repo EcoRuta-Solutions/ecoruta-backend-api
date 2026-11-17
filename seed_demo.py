@@ -7,11 +7,13 @@ información coherente desde la app real.
 Seguridad:
 - No corre si ya hay datos reales (zonas_ruta o puntos_criticos con filas),
   salvo con --force.
-- Solo borra lo marcado como demo: rutas demo (o de camiones demo) y sus
-  paradas, camiones demo y las lecturas de los nodos demo. Nodos, vehículos y
-  conductores demo se actualizan en su lugar (por código, placa o nombre).
+- Solo borra lo marcado como demo: rutas demo (o de camiones demo) con sus
+  paradas y las lecturas de los nodos demo. Camiones, nodos y conductores demo
+  se actualizan en su lugar (por placa, código o nombre) con es_demo=true.
   Nunca borra rutas ni paradas reales.
-- Antes aplica scripts/migrar_es_demo.py (columnas es_demo).
+- La flota demo vive solo en `camiones`: ya no crea filas en `vehiculos`. Los
+  conductores demo quedan con camion_id.
+- Antes aplica scripts/migrar_unificar_flota.py (es_demo, tipo, camion_id…).
 
 Uso:
     python seed_demo.py
@@ -25,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
-from migrar_es_demo import migrar as migrar_es_demo
+from migrar_unificar_flota import migrar as migrar_flota
 from sqlalchemy import inspect, or_, select, text
 
 from app.core.turnos import Turno
@@ -36,7 +38,6 @@ from app.models.lectura import Lectura
 from app.models.nodo import Nodo
 from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
-from app.models.vehiculo import Vehiculo
 
 NODOS = [
     # codigo, nombre, lat, lon, fill_pct (None = sin lecturas), tilt
@@ -50,20 +51,14 @@ NODOS = [
     ("TRU-008", "Av. América Oeste", -8.1080, -79.0390, None, False),
 ]
 
+# placa, capacidad (kg), turno, tipo — datos demo, no de SEGAT.
 CAMIONES = [
-    ("TCA-241", 8000, "Mañana"),
-    ("TCA-508", 6000, "Tarde"),
-    ("TCA-316", 8000, "Noche"),
+    ("TCA-241", 8000, "Mañana", "Compactador"),
+    ("TCA-508", 6000, "Tarde", "Volquete"),
+    ("TCA-316", 8000, "Noche", "Compactador"),
 ]
 
-# placa, tipo, capacidad_toneladas, estado
-VEHICULOS = [
-    ("TCA-241", "Compactador", 8, "operativo"),
-    ("TCA-508", "Volquete", 6, "operativo"),
-    ("TCA-316", "Compactador", 8, "mantenimiento"),
-]
-
-# nombre, telefono, categoria_licencia, estado, vehiculo_idx (1-based), usa_conductor
+# nombre, telefono, categoria_licencia, estado, camion_idx (1-based), usa_conductor
 CONDUCTORES = [
     ("Luis Rodríguez", "944 123 456", "A-IIb", "disponible", 1, True),
     ("María Flores", "955 234 567", "A-IIIa", "en_ruta", 2, False),
@@ -105,9 +100,6 @@ def borrar_demo(db) -> None:
         synchronize_session=False
     )
     db.query(Ruta).filter(Ruta.id.in_(rutas_demo)).delete(synchronize_session=False)
-    db.query(Camion).filter(Camion.es_demo.is_(True)).delete(
-        synchronize_session=False
-    )
     nodos_demo = select(Nodo.id).where(Nodo.es_demo.is_(True))
     db.query(Lectura).filter(Lectura.nodo_id.in_(nodos_demo)).delete(
         synchronize_session=False
@@ -139,24 +131,29 @@ def sembrar_nodos(db) -> list:
     return nodos
 
 
-def sembrar_vehiculos_y_conductores(db, conductor) -> None:
-    """Upsert por placa (vehículos) y por nombre (conductores); no borra nada.
-
-    Estas tablas no tienen es_demo: quedan fuera de scripts/limpiar_datos_demo.py.
-    """
-    vehiculos = []
-    for placa, tipo, capacidad, estado in VEHICULOS:
-        vehiculo = db.query(Vehiculo).filter(Vehiculo.placa == placa).first()
-        if vehiculo is None:
-            vehiculo = Vehiculo(placa=placa)
-            db.add(vehiculo)
-        vehiculo.tipo = tipo
-        vehiculo.capacidad_toneladas = capacidad
-        vehiculo.estado = estado
-        vehiculos.append(vehiculo)
+def sembrar_camiones(db) -> list[Camion]:
+    """Crea o actualiza por placa los camiones demo (no se borran: pueden tener conductores)."""
+    camiones = []
+    for placa, capacidad, turno, tipo in CAMIONES:
+        camion = db.query(Camion).filter(Camion.placa == placa).first()
+        if camion is None:
+            camion = Camion(placa=placa)
+            db.add(camion)
+        camion.capacidad = capacidad
+        camion.capacidad_toneladas = capacidad / 1000
+        camion.turno = turno
+        camion.tipo = tipo
+        camion.estado = "operativo"
+        camion.activo = True
+        camion.es_demo = True
+        camiones.append(camion)
     db.flush()
+    return camiones
 
-    for nombre, telefono, licencia, estado, vehiculo_idx, usa in CONDUCTORES:
+
+def sembrar_conductores(db, conductor, camiones: list[Camion]) -> None:
+    """Crea o actualiza por nombre los conductores demo, con su camión demo."""
+    for nombre, telefono, licencia, estado, camion_idx, usa in CONDUCTORES:
         registro = db.query(Conductor).filter(Conductor.nombre == nombre).first()
         if registro is None:
             registro = Conductor(nombre=nombre)
@@ -165,7 +162,8 @@ def sembrar_vehiculos_y_conductores(db, conductor) -> None:
         registro.telefono = telefono
         registro.categoria_licencia = licencia
         registro.estado = estado
-        registro.vehiculo_id = vehiculos[vehiculo_idx - 1].id
+        registro.camion_id = camiones[camion_idx - 1].id
+        registro.es_demo = True
     db.flush()
 
 
@@ -190,7 +188,7 @@ def main(argv: list[str] | None = None) -> None:
                 "(solo reemplaza lo marcado como demo)."
             )
 
-        migrar_es_demo(engine)
+        migrar_flota(engine)
 
         conductor = (
             db.query(Usuario)
@@ -205,20 +203,8 @@ def main(argv: list[str] | None = None) -> None:
             borrar_demo(db)
             nodos = sembrar_nodos(db)
 
-            camiones = []
-            for placa, capacidad, turno in CAMIONES:
-                camion = Camion(
-                    placa=placa,
-                    capacidad=capacidad,
-                    turno=turno,
-                    estado="operativo",
-                    es_demo=True,
-                )
-                db.add(camion)
-                camiones.append(camion)
-            db.flush()
-
-            sembrar_vehiculos_y_conductores(db, conductor)
+            camiones = sembrar_camiones(db)
+            sembrar_conductores(db, conductor, camiones)
 
             hoy = date.today()
             turno = Turno.manana
@@ -253,7 +239,6 @@ def main(argv: list[str] | None = None) -> None:
 
         print(f"Nodos demo: {len(NODOS)}")
         print(f"Camiones demo: {len(CAMIONES)}")
-        print(f"Vehículos demo: {len(VEHICULOS)}")
         print(f"Conductores demo: {len(CONDUCTORES)}")
         print(f"Rutas demo para el conductor '{conductor.nombre}' (id {conductor.id}):")
         for camion_idx, nodos_ids, estado, _ in RUTAS:
