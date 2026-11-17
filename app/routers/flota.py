@@ -44,11 +44,12 @@ def _a_usuario_panel(usuario: Usuario) -> UsuarioPanelOut:
 @router.get("/resumen", response_model=ResumenFlotaOut)
 def resumen_flota(
     incluir_demo: bool = Query(
-        default=True, description="Incluir los camiones demo de seed_demo.py"
+        default=False,
+        description="Incluir los camiones con es_demo=true (solo para depuración)",
     ),
     db: Session = Depends(get_db),
 ):
-    """Totales de la tabla `camiones` por turno y estado."""
+    """Totales de la tabla `camiones` por turno y estado; por defecto sin los demo."""
     return flota_service.resumen_flota(db, incluir_demo=incluir_demo)
 
 
