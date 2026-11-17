@@ -131,7 +131,7 @@ Endpoints:
 | GET | `/camiones` | `municipalidad`, `conductor` |
 | PATCH | `/camiones/{id}/estado` | `municipalidad` |
 
-- `GET /flota/resumen` da los totales por turno y por estado, cuántos son demo y cuántos tienen datos provisionales. Con `?incluir_demo=false` deja fuera los demo.
+- `GET /flota/resumen` da los totales por turno y por estado y cuántos tienen datos provisionales. **Por defecto excluye los camiones con `es_demo=true`.** Para depurar, `?incluir_demo=true` los incluye y `demo` dice cuántos son.
 - `GET /camiones` acepta los filtros opcionales `?turno=manana|tarde|noche` y `?estado=operativo|reserva|mantenimiento`. El filtro de turno también encuentra los demo, que se guardan como "Mañana". Sin filtros responde igual que antes, y cada camión trae ahora los campos nuevos.
 - `PATCH /camiones/{id}/estado` recibe un cuerpo como `{"estado": "mantenimiento", "activar_reserva": true}`. Con `activar_reserva`, la primera reserva del mismo turno pasa a `operativo`. Si no hay ninguna, responde 409 y no cambia nada. Si el camión no está operativo o el turno no es válido, responde 422.
 

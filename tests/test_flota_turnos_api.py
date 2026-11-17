@@ -166,10 +166,14 @@ def test_rol_no_permitido_devuelve_403(entorno, rol, metodo, ruta):
 # --- Resumen ---------------------------------------------------------------
 
 
-def test_resumen_por_turno_y_estado(entorno):
+def test_resumen_con_demo_para_depuracion(entorno):
     cliente, tokens, _ = entorno
 
-    datos = cliente.get("/flota/resumen", headers=con_token(tokens, "municipalidad")).json()
+    datos = cliente.get(
+        "/flota/resumen",
+        params={"incluir_demo": "true"},
+        headers=con_token(tokens, "municipalidad"),
+    ).json()
 
     assert datos["total"] == 40
     assert datos["demo"] == 3
@@ -184,18 +188,43 @@ def test_resumen_por_turno_y_estado(entorno):
     }
 
 
-def test_resumen_sin_demo(entorno):
+@pytest.mark.parametrize("parametros", [{}, {"incluir_demo": "false"}])
+def test_resumen_por_defecto_excluye_demo(entorno, parametros):
     cliente, tokens, _ = entorno
 
     datos = cliente.get(
         "/flota/resumen",
-        params={"incluir_demo": "false"},
+        params=parametros,
         headers=con_token(tokens, "municipalidad"),
     ).json()
 
     assert datos["total"] == 37
     assert datos["demo"] == 0
-    assert datos["por_turno"]["manana"]["operativo"] == 13
+    assert datos["por_turno"]["manana"] == {
+        "operativo": 13, "reserva": 3, "mantenimiento": 0, "total": 16
+    }
+    assert datos["por_turno"]["tarde"]["total"] == 8
+    assert datos["por_turno"]["noche"]["total"] == 13
+
+
+def test_camion_demo_no_cuenta_por_defecto_pero_si_con_incluir_demo(entorno):
+    cliente, tokens, Sesion = entorno
+    with Sesion() as db:
+        db.add(Camion(placa="TST-001", turno="Manana", capacidad=12000, es_demo=True))
+        db.commit()
+    cabecera = con_token(tokens, "municipalidad")
+
+    por_defecto = cliente.get("/flota/resumen", headers=cabecera).json()
+    con_demo = cliente.get(
+        "/flota/resumen", params={"incluir_demo": "true"}, headers=cabecera
+    ).json()
+
+    assert por_defecto["total"] == 37
+    assert por_defecto["por_turno"]["manana"]["operativo"] == 13
+    assert por_defecto["demo"] == 0
+    assert con_demo["total"] == 41  # 37 reales + 3 demo del fixture + TST-001
+    assert con_demo["por_turno"]["manana"]["operativo"] == 15
+    assert con_demo["demo"] == 4
 
 
 # --- Listado con filtros ---------------------------------------------------
@@ -281,8 +310,8 @@ def test_mantenimiento_activando_reserva_del_mismo_turno(entorno):
     assert datos["reserva_activada"]["estado"] == "operativo"
 
     resumen = cliente.get("/flota/resumen", headers=con_token(tokens, "municipalidad")).json()
-    assert resumen["por_turno"]["manana"] == {
-        "operativo": 14, "reserva": 2, "mantenimiento": 1, "total": 17
+    assert resumen["por_turno"]["manana"] == {  # sin el demo de mañana
+        "operativo": 13, "reserva": 2, "mantenimiento": 1, "total": 16
     }
 
 
