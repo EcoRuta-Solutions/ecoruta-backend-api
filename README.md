@@ -18,16 +18,20 @@ Las partes B y D fueron avanzadas por Mantilla. La Parte D se dejó en la rama d
 Con Docker Desktop abierto, desde la raíz del proyecto en PowerShell:
 
 ```powershell
+copy .env.example .env      # primero el .env: docker compose toma de ahí la clave de la base
+# edita .env y reemplaza todos los valores (ver abajo)
 docker compose up -d db
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
 ```
 
-En el `.env`:
-- `DATABASE_URL=postgresql+psycopg2://ecoruta:ecoruta123@localhost:5433/ecoruta_db` (la plantilla puede traer un valor genérico; usa este).
-- `SECRET_KEY` y `DEVICE_API_KEY`: genera una cadena distinta para cada una con `python -c "import secrets; print(secrets.token_hex(32))"`. No las compartas ni las subas a Git.
+En el `.env` (nunca se sube a Git; `.gitignore` excluye `.env` y `.env.*`):
+- `POSTGRES_USER`, `POSTGRES_PASSWORD` y `POSTGRES_DB`: los usa `docker-compose.yml` para crear la base. Elige una clave propia.
+- `DATABASE_URL=postgresql+psycopg2://USUARIO:CLAVE@localhost:5433/ecoruta_db`, con el mismo usuario, clave y base de arriba.
+- `SECRET_KEY=<generar>` y `DEVICE_API_KEY=<generar>`: genera un valor distinto para cada una con `python -c "import secrets; print(secrets.token_hex(32))"`. No las compartas ni las subas a Git.
+
+La base solo escucha en `127.0.0.1:5433`, así que no queda expuesta a la red local. Si ya tenías el contenedor creado, su clave es la que se usó al crearlo por primera vez: pon esa misma en `POSTGRES_PASSWORD`, o cámbiala (ver [Seguridad](#seguridad-credenciales)).
 
 Después:
 
@@ -40,7 +44,14 @@ uvicorn app.main:app --reload
 
 La documentación interactiva queda en `http://127.0.0.1:8000/docs` (botón **Authorize** para iniciar sesión).
 
-Solo hay dos roles: `municipalidad` y `conductor`. No existe registro público ni un endpoint para crear usuarios. Las **cuentas reales** se crean con `scripts/crear_usuario.py` (ver [Crear cuentas reales](#crear-cuentas-reales)) y las cuentas demo, con `python scripts/crear_usuarios_demo.py`.
+Solo hay dos roles: `municipalidad` y `conductor`. No existe registro público ni un endpoint para crear usuarios. Las **cuentas reales** se crean con `scripts/crear_usuario.py` (ver [Crear cuentas reales](#crear-cuentas-reales)). Las cuentas demo (`conductor@ecoruta.com` y `municipalidad3@ecoruta.com`, con `es_demo = true`) se crean con `python scripts/crear_usuarios_demo.py`. Su contraseña **no está en el repo**: el script la toma de la variable `ECORUTA_DEMO_PASSWORD` o la pide por consola, y nunca la imprime.
+
+## Seguridad (credenciales)
+
+- El repo es público: **no** debe contener contraseñas, claves ni cadenas de conexión reales. Todos los valores van en `.env`, y `.env.example` solo tiene marcadores (`USUARIO`, `CLAVE`, `GENERAR_CON_SECRETS_TOKEN_HEX`).
+- Las cuentas se crean con scripts que piden la contraseña por consola: `scripts/crear_usuario.py` para las reales y `scripts/crear_usuarios_demo.py` para las demo.
+- Los respaldos de la base (`*.sql`, `*.dump`, `*.backup`) están en `.gitignore`, porque pueden tener hashes de contraseñas y datos reales.
+- Para cambiar la clave de la base local de Docker, conéctate con la clave actual y ejecuta `ALTER USER <usuario> WITH PASSWORD '<nueva>';`. Después pon la clave nueva en `POSTGRES_PASSWORD` y en `DATABASE_URL`.
 
 ## Roles
 

@@ -3,12 +3,14 @@ services:
     image: postgis/postgis:16-3.4
     container_name: ecoruta_db
     restart: unless-stopped
+    # Los valores salen del .env (Docker Compose lo lee solo). Ver .env.example.
     environment:
-      POSTGRES_USER: ecoruta
-      POSTGRES_PASSWORD: ecoruta123
-      POSTGRES_DB: ecoruta_db
+      POSTGRES_USER: ${POSTGRES_USER:-ecoruta}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en el archivo .env}
+      POSTGRES_DB: ${POSTGRES_DB:-ecoruta_db}
     ports:
-      - "5433:5432"
+      # Solo desde esta máquina: la base no queda expuesta a la red local.
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
