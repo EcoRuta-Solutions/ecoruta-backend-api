@@ -18,6 +18,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.config import DATABASE_URL
 from app.database import Base
+from app.models.alerta import Alerta
 from app.models.camion import Camion
 from app.models.conductor import Conductor
 from app.models.lectura import Lectura
@@ -48,6 +49,8 @@ limpieza_demo = _cargar_script("limpiar_datos_demo")
 migracion_flota = _cargar_script("migrar_unificar_flota")
 migracion_rutas = _cargar_script("migrar_rutas_puntos_criticos")
 matriz_osrm = _cargar_script("calcular_matriz_distancias")
+prototipo = _cargar_script("crear_punto_prototipo")
+simulador_sensor = _cargar_script("simular_sensor")
 
 TABLAS_PRUEBA = [
     Usuario.__table__,
@@ -61,6 +64,7 @@ TABLAS_PRUEBA = [
     Conductor.__table__,
     ZonaRuta.__table__,
     ReporteCampo.__table__,
+    Alerta.__table__,
 ]
 
 CABECERA_CSV = [
@@ -149,7 +153,7 @@ def db_limpia(engine_pruebas):
         conexion.execute(
             text(
                 "TRUNCATE puntos_criticos, usuarios, camiones, nodos, lecturas, "
-                "rutas, paradas, vehiculos, conductores, zonas_ruta, reportes_campo RESTART IDENTITY CASCADE"
+                "rutas, paradas, vehiculos, conductores, zonas_ruta, reportes_campo, alertas RESTART IDENTITY CASCADE"
             )
         )
     return engine_pruebas

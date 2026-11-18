@@ -1,3 +1,4 @@
+from app.models.alerta import Alerta
 from app.models.camion import Camion
 from app.models.lectura import Lectura
 from app.models.nodo import Nodo

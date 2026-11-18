@@ -29,8 +29,10 @@ class ReporteCampoOut(BaseModel):
     id: int
     punto_critico_id: int
     codigo_punto: str
-    usuario_id: int
-    usuario_nombre: str
+    usuario_id: int | None = Field(description="null si el reporte viene de un sensor")
+    usuario_nombre: str | None
+    origen: Literal["campo", "sensor"] = "campo"
+    nivel_pct: float | None = Field(default=None, description="Solo en reportes de sensor")
     estado: EstadoReporte
     observacion: str | None
     lat: float | None
@@ -52,6 +54,8 @@ class ReportesCampoPagina(BaseModel):
 class UltimoReporteBreve(BaseModel):
     estado: EstadoReporte
     creado_en: datetime
+    origen: Literal["campo", "sensor"] = "campo"
+    nivel_pct: float | None = None
 
 
 class UltimoReportePuntoOut(BaseModel):

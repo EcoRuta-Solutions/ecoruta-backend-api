@@ -1,7 +1,7 @@
 import enum
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, false
 from sqlalchemy.orm import column_property
 from sqlalchemy.sql import func
 
@@ -44,3 +44,8 @@ class PuntoCritico(Base):
     creado_en = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # True para puntos de prototipo (p. ej. PROTO-UTP): no son parte del listado
+    # oficial y no entran en sus estadísticas ni en el reparto por turno.
+    es_prototipo = Column(Boolean, nullable=False, default=False, server_default=false())
+    # Sensor (nodo) instalado en el punto, si tiene; sus lecturas dan el llenado.
+    nodo_id = Column(Integer, ForeignKey("nodos.id"), nullable=True, unique=True)

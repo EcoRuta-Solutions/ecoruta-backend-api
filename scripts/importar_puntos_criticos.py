@@ -217,18 +217,18 @@ def contar(engine: Engine) -> tuple[dict[str, int], dict[str, int]]:
         por_estado = Counter(
             dict(
                 conexion.execute(
-                    select(PuntoCritico.estado, func.count()).group_by(
-                        PuntoCritico.estado
-                    )
+                    select(PuntoCritico.estado, func.count())
+                    .where(PuntoCritico.es_prototipo.is_(False))
+                    .group_by(PuntoCritico.estado)
                 ).all()
             )
         )
         por_prioridad = Counter(
             dict(
                 conexion.execute(
-                    select(
-                        PuntoCritico.priorizacion_obligatoria, func.count()
-                    ).group_by(PuntoCritico.priorizacion_obligatoria)
+                    select(PuntoCritico.priorizacion_obligatoria, func.count())
+                    .where(PuntoCritico.es_prototipo.is_(False))
+                    .group_by(PuntoCritico.priorizacion_obligatoria)
                 ).all()
             )
         )

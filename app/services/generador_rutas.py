@@ -22,14 +22,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import config
-from app.core.turnos import Turno
+from app.core.turnos import Turno, normalizar_turno, turno_de_hora
 from app.models.camion import Camion, EstadoCamion
 from app.models.conductor import Conductor
 from app.models.punto_critico import PuntoCritico
 from app.models.reporte_campo import EstadoReporte
 from app.models.ruta import Parada, Ruta
 from app.services import reportes_service
-from app.services.distancias_service import METODO_HAVERSINE, Punto, matriz_para_puntos
+from app.services.distancias_service import METODO_OSRM, Punto, matriz_para_puntos
 from app.services.flota_service import filtrar_camiones
 from app.services.optimizador_service import distancia_camino_km, repartir_en_rutas
 
@@ -109,7 +109,13 @@ def _camiones(db: Session, turno: Turno, incluir_reserva: bool) -> list[Camion]:
     )
 
 
-def _puntos(db: Session, solo_prioritarios: bool, solo_con_reporte_lleno: bool) -> list[PuntoGenerado]:
+def _puntos(
+    db: Session,
+    solo_prioritarios: bool,
+    solo_con_reporte_lleno: bool,
+    incluir_prototipos: bool = False,
+) -> list[PuntoGenerado]:
+    """Puntos a recolectar. Los de prototipo solo entran si se pide (ruta del conductor)."""
     ultimo = reportes_service.ultimo_reporte_por_punto()
     consulta = (
         select(
@@ -120,18 +126,22 @@ def _puntos(db: Session, solo_prioritarios: bool, solo_con_reporte_lleno: bool) 
             PuntoCritico.direccion,
             ultimo.c.estado,
             ultimo.c.creado_en,
+            ultimo.c.origen,
         )
         .outerjoin(ultimo, ultimo.c.punto_critico_id == PuntoCritico.id)
         .order_by(PuntoCritico.id)
     )
+    if not incluir_prototipos:
+        consulta = consulta.where(PuntoCritico.es_prototipo.is_(False))
     if solo_prioritarios:
         consulta = consulta.where(PuntoCritico.priorizacion_obligatoria.is_(True))
 
     momento = reportes_service.ahora()
     puntos = []
-    for id_, codigo, lat, lon, direccion, estado, creado_en in db.execute(consulta):
+    for id_, codigo, lat, lon, direccion, estado, creado_en, origen in db.execute(consulta):
         if solo_con_reporte_lleno and (
-            reportes_service.estado_llenado(estado, creado_en, momento) not in ESTADOS_LLENOS
+            reportes_service.estado_llenado(estado, creado_en, momento, origen)
+            not in ESTADOS_LLENOS
         ):
             continue
         puntos.append(PuntoGenerado(id_, codigo, lat, lon, direccion))
@@ -266,13 +276,13 @@ def parametros_usados(metodo: str) -> dict:
         "velocidad_media_kmh": config.OPTIMIZADOR_VELOCIDAD_KMH,
         "minutos_por_parada": config.OPTIMIZADOR_MINUTOS_POR_PARADA,
         "factor_circuito": (
-            config.OPTIMIZADOR_FACTOR_CIRCUITO if metodo == METODO_HAVERSINE else None
+            config.OPTIMIZADOR_FACTOR_CIRCUITO if metodo != METODO_OSRM else None
         ),
         "capacidad_camion_usada": False,
         "provisionales": [
             "minutos_por_parada",
             "velocidad_media_kmh",
-            *(["factor_circuito"] if metodo == METODO_HAVERSINE else []),
+            *(["factor_circuito"] if metodo != METODO_OSRM else []),
         ],
         "notas": [
             "El reparto se equilibra por número de paradas: no hay peso por punto.",
@@ -280,3 +290,113 @@ def parametros_usados(metodo: str) -> dict:
             "La distancia no incluye el viaje desde la base ni hasta el relleno (ubicaciones sin confirmar).",
         ],
     }
+
+
+# --- Ruta del conductor (POST /rutas/generar-mia) -----------------------------------------
+
+
+class SinCamionAsignado(Exception):
+    pass
+
+
+class RutaEnCurso(Exception):
+    pass
+
+
+@dataclass
+class ResultadoRutaConductor:
+    ruta: RutaGenerada
+    nro_puntos: int
+    metodo_distancia: str
+    rutas_reemplazadas: int
+
+
+def generar_ruta_conductor(db: Session, usuario_id: int, fecha: date, ahora: datetime) -> ResultadoRutaConductor:
+    """Una ruta para el camión del conductor con TODOS los puntos lleno/desbordado vigentes.
+
+    - El camión sale de conductores.camion_id del conductor activo de ese usuario.
+    - Si el camión ya tiene una ruta en curso hoy -> RutaEnCurso (409).
+    - Si tiene rutas pendientes hoy, se reemplazan.
+    - Sin puntos llenos -> SinPuntos (422).
+    - Sin tope de paradas: un solo camión recorre todos los puntos llenos.
+    - Incluye los puntos de prototipo (sensor) y deja conductor_id = usuarios.id.
+    """
+    conductor = (
+        db.query(Conductor)
+        .filter(
+            Conductor.usuario_id == usuario_id,
+            Conductor.activo.is_(True),
+            Conductor.camion_id.is_not(None),
+        )
+        .order_by(Conductor.id)
+        .first()
+    )
+    if conductor is None:
+        raise SinCamionAsignado(
+            "No tienes un camión asignado. Pide a la municipalidad que te vincule a uno."
+        )
+    camion = db.get(Camion, conductor.camion_id)
+
+    de_hoy = db.query(Ruta).filter(Ruta.camion_id == camion.id, Ruta.fecha_inicio == fecha).all()
+    if any(r.estado.strip().lower() == "en_proceso" for r in de_hoy):
+        raise RutaEnCurso(
+            f"El camión {camion.placa} ya tiene una ruta en proceso hoy. "
+            "Termínala antes de generar otra."
+        )
+    pendientes = [r for r in de_hoy if r.estado.strip().lower() == ESTADO_PENDIENTE]
+
+    puntos = _puntos(db, solo_prioritarios=False, solo_con_reporte_lleno=True, incluir_prototipos=True)
+    if not puntos:
+        raise SinPuntos("No hay puntos llenos ni desbordados con un reporte vigente para recolectar.")
+
+    matriz = matriz_para_puntos(
+        [Punto(p.codigo, p.lat, p.lon) for p in puntos], permitir_mixta=True
+    )
+    try:
+        [orden] = repartir_en_rutas(matriz.km, 1, len(puntos), config.OPTIMIZADOR_TIEMPO_MAX_S)
+    except (ValueError, RuntimeError) as error:
+        raise ParametroInvalido(str(error))
+
+    for ruta in pendientes:
+        db.delete(ruta)
+    db.flush()
+
+    turno = normalizar_turno(camion.turno) or turno_de_hora(ahora.time())
+    distancia = distancia_camino_km(matriz.km, orden)
+    minutos = (
+        distancia / config.OPTIMIZADOR_VELOCIDAD_KMH * 60
+        + len(orden) * config.OPTIMIZADOR_MINUTOS_POR_PARADA
+    )
+    inicio = ahora.replace(second=0, microsecond=0, tzinfo=None)
+    fin = inicio + timedelta(minutes=minutos)
+    fin_turno = datetime.combine(fecha, turno.fin)
+    if turno.cruza_medianoche and turno.fin <= inicio.time():
+        fin_turno += timedelta(days=1)
+
+    ruta = Ruta(
+        fecha_inicio=fecha,
+        fecha_fin=fin.date(),
+        hora_inicio=inicio,
+        hora_fin=fin,
+        camion_id=camion.id,
+        conductor_id=usuario_id,  # usuarios.id, igual que el generador por turno
+        estado="Pendiente",
+        es_demo=False,
+        turno=turno.value,
+        distancia_km=round(distancia, 3),
+        tiempo_estimado_min=round(minutos, 1),
+        metodo_distancia=matriz.metodo,
+    )
+    db.add(ruta)
+    db.flush()
+    paradas = [puntos[i] for i in orden]
+    for posicion, punto in enumerate(paradas, start=1):
+        db.add(Parada(ruta_id=ruta.id, punto_critico_id=punto.id, orden=posicion))
+    db.commit()
+
+    return ResultadoRutaConductor(
+        ruta=RutaGenerada(ruta, camion, paradas, fin > fin_turno),
+        nro_puntos=len(puntos),
+        metodo_distancia=matriz.metodo,
+        rutas_reemplazadas=len(pendientes),
+    )
