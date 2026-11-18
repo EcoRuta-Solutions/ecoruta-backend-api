@@ -20,6 +20,8 @@ class PuntoCriticoOut(BaseModel):
     este_utm17s: int | None
     norte_utm17s: int | None
     creado_en: datetime
+    # True para puntos de prototipo (sensor de demostración), fuera del listado oficial.
+    es_prototipo: bool = False
     # Del último reporte de campo (no demo); null si nunca se reportó.
     ultimo_reporte: UltimoReporteBreve | None = None
     # True si el último reporte tiene menos de REPORTE_VIGENCIA_HORAS.

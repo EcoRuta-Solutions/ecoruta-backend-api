@@ -2,6 +2,7 @@ import enum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -9,12 +10,18 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     false,
 )
 from sqlalchemy.sql import func
 
 from app.database import Base
+
+
+class OrigenReporte(str, enum.Enum):
+    campo = "campo"
+    sensor = "sensor"
 
 
 class EstadoReporte(str, enum.Enum):
@@ -25,10 +32,11 @@ class EstadoReporte(str, enum.Enum):
 
 
 class ReporteCampo(Base):
-    """Nivel de llenado de un punto crítico observado en campo por un usuario.
+    """Nivel de llenado de un punto crítico: observado en campo por un usuario o
+    medido por un sensor (origen = "sensor", p. ej. el contenedor prototipo).
 
-    Es la única fuente de ese dato: no hay sensores en los puntos críticos ni
-    datos públicos. Nunca se generan reportes simulados.
+    No hay datos públicos del llenado: estas son las únicas fuentes. Nunca se
+    generan reportes simulados desde la API.
     """
 
     __tablename__ = "reportes_campo"
@@ -37,8 +45,13 @@ class ReporteCampo(Base):
     punto_critico_id = Column(
         Integer, ForeignKey("puntos_criticos.id"), nullable=False, index=True
     )
-    # Sale del JWT de quien reporta, nunca del payload.
-    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    # Sale del JWT de quien reporta, nunca del payload. Null solo si origen = sensor.
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
+    # "campo": lo reporta una persona (vigencia REPORTE_VIGENCIA_HORAS);
+    # "sensor": lectura de un sensor (vigencia SENSOR_VIGENCIA_MIN).
+    origen = Column(String, nullable=False, default="campo", server_default="campo")
+    # Nivel medido por el sensor (%); null en reportes de campo.
+    nivel_pct = Column(Float, nullable=True)
     estado = Column(
         Enum(
             EstadoReporte,
@@ -66,4 +79,11 @@ class ReporteCampo(Base):
     __table_args__ = (
         # Último reporte por punto (DISTINCT ON punto ORDER BY creado_en DESC).
         Index("ix_reportes_campo_punto_creado", "punto_critico_id", creado_en.desc()),
+        CheckConstraint(
+            "origen IN ('campo', 'sensor')", name="ck_reportes_campo_origen"
+        ),
+        CheckConstraint(
+            "origen = 'sensor' OR usuario_id IS NOT NULL",
+            name="ck_reportes_campo_usuario_si_campo",
+        ),
     )

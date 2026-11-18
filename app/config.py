@@ -27,3 +27,11 @@ OPTIMIZADOR_TIEMPO_MAX_S = int(os.getenv("OPTIMIZADOR_TIEMPO_MAX_S", "10"))
 MATRIZ_DISTANCIAS_ARCHIVO = os.getenv("MATRIZ_DISTANCIAS_ARCHIVO", "data/matriz_distancias.json")
 # Servidor OSRM (por defecto el público de demostración, con límites de uso).
 OSRM_URL = os.getenv("OSRM_URL", "https://router.project-osrm.org")
+
+# Sensor del contenedor prototipo (ESP32 + HC-SR04): mapeo de nivel % a estado.
+# < MEDIO: vacio | < LLENO: medio | < DESBORDADO: lleno | >= DESBORDADO: desbordado.
+SENSOR_NIVEL_MEDIO = float(os.getenv("SENSOR_NIVEL_MEDIO", "35"))
+SENSOR_NIVEL_LLENO = float(os.getenv("SENSOR_NIVEL_LLENO", "85"))
+SENSOR_NIVEL_DESBORDADO = float(os.getenv("SENSOR_NIVEL_DESBORDADO", "100"))
+# Un dato de sensor vale como estado del punto durante estos minutos; luego, "sin_datos".
+SENSOR_VIGENCIA_MIN = float(os.getenv("SENSOR_VIGENCIA_MIN", "15"))

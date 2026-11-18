@@ -289,6 +289,82 @@ Respuesta (resumida):
 - por ruta: `turno`, `distancia_km`, `tiempo_estimado_min` y `metodo_distancia`;
 - por parada: `punto_critico_id` y `punto_critico` (`id, codigo, direccion, referencia, lat, lon, priorizacion_obligatoria, estado_llenado`). En esas paradas, `nodo_id` y `nodo` vienen en null.
 
+## Contenedor prototipo con sensor (ESP32 + HC-SR04)
+
+Para la demo hay un contenedor físico con un ESP32 y un sensor ultrasónico HC-SR04. El ESP32 envía por WiFi el nivel de llenado. Cuando el contenedor llega a "lleno":
+- se ve en el mapa;
+- se crea una alerta para la municipalidad y los conductores;
+- el conductor puede generar su ruta con los puntos llenos.
+
+**1. Preparar la base y crear el punto prototipo.** Ambos comandos se pueden correr varias veces. Las coordenadas son **obligatorias** y tienen que ser las del lugar real del contenedor; el script no inventa ninguna.
+
+```powershell
+python scripts\migrar_sensor_prototipo.py
+python scripts\crear_punto_prototipo.py --lat <LATITUD> --lon <LONGITUD>
+```
+
+- **El punto:** crea el punto crítico `PROTO-UTP` ("Prototipo EcoRuta (UTP)", con `es_prototipo = true`) y el nodo/sensor `PROTO-UTP` vinculado a él.
+- **Fuera de los datos oficiales:** el prototipo **no** entra en los 151 puntos oficiales ni en sus resúmenes, ni en el reparto por turno de `POST /rutas/generar`.
+- **En el mapa:** para mostrarlo, llama a `GET /puntos-criticos?incluir_prototipo=true` y usa el campo `es_prototipo` de cada punto.
+
+**2. Generar la clave del dispositivo** (si todavía no tienes una), ponerla en `DEVICE_API_KEY` del `.env` y grabarla en el firmware del ESP32. **No la subas a ningún repositorio**, ni este ni el del firmware: usa un `secrets.h` ignorado por git.
+
+```powershell
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+**3. Levantar la API accesible desde la red local** (el ESP32 y la PC en la misma WiFi):
+
+```powershell
+.\venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+ipconfig    # anota la "Dirección IPv4" de la WiFi, p. ej. 192.168.1.50
+```
+
+Abre el puerto 8000 en el Firewall de Windows **solo para redes privadas**, desde una PowerShell como administrador y una sola vez:
+
+```powershell
+New-NetFirewallRule -DisplayName "EcoRuta API (8000, red privada)" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+```
+
+La WiFi de la demo tiene que estar marcada como "Red privada" en Windows. Al terminar, puedes quitar la regla con `Remove-NetFirewallRule -DisplayName "EcoRuta API (8000, red privada)"`.
+
+**4. Lo que envía el ESP32.** Cada pocos segundos hace esta petición:
+
+```http
+POST http://<IP-DE-LA-PC>:8000/sensores/lecturas
+X-API-Key: <DEVICE_API_KEY>
+Content-Type: application/json
+
+{"codigo": "PROTO-UTP", "nivel_pct": 87.5}
+```
+
+- **Nivel:** `nivel_pct` va de 0 a 120 (puede pasar de 100 si desborda).
+- **Estados:** `< 35` vacío, `35–84` medio, `85–99` lleno y `≥ 100` desbordado. Los umbrales están en `app/config.py` (`SENSOR_NIVEL_*`).
+- **Qué hace la API con cada lectura:** la guarda en `lecturas` y la registra como reporte de llenado con `origen = "sensor"` (sin usuario y nunca demo). Avisa por el WebSocket `/ws/panel` con los eventos `sensor_lectura`, `alerta_nueva` y `alerta_resuelta`.
+- **Vigencia:** el dato del sensor vale **15 minutos** (`SENSOR_VIGENCIA_MIN`). Si el ESP32 deja de enviar, el punto vuelve a `sin_datos`.
+- **Alertas:**
+  - Al pasar a lleno o desbordado se crea **una** alerta: "Contenedor lleno: PROTO-UTP (87%)". Las lecturas siguientes no la repiten.
+  - La alerta se resuelve cuando el nivel baja de 85 o cuando el conductor marca la parada como recolectada.
+
+**5. Plan B si el hardware falla.** El simulador envía lecturas **simuladas** en rampa. Toma la clave de `DEVICE_API_KEY` del entorno o del `.env` y nunca la imprime.
+
+```powershell
+.\venv\Scripts\python.exe scripts\simular_sensor.py --url http://127.0.0.1:8000 --codigo PROTO-UTP --desde 10 --hasta 100 --paso 10 --intervalo 5
+```
+
+**Endpoints:**
+| Método | Ruta | Quién | Para qué |
+|---|---|---|---|
+| POST | `/sensores/lecturas` | Dispositivo con `X-API-Key` | Lectura del sensor |
+| GET | `/alertas/activas` | `municipalidad`, `conductor` | Alertas sin resolver (solo lectura) |
+| POST | `/rutas/generar-mia` | `conductor` | Ruta para su camión con todos los puntos llenos/desbordados vigentes |
+
+`POST /rutas/generar-mia`:
+- **Camión:** usa el del conductor autenticado (`conductores.camion_id`) y el optimizador existente (OR-Tools más la matriz OSRM), **sin tope de paradas**.
+- **Matriz:** si un punto (como el prototipo) no está en la matriz OSRM, esos pares se aproximan y `metodo_distancia` sale `osrm_parcial`.
+- **Errores:** responde **409** si su camión ya tiene una ruta en proceso hoy o si no tiene camión asignado, y **422** si no hay puntos llenos.
+- **Ruta anterior:** si tenía una ruta pendiente hoy, la reemplaza.
+
 ## Rutas por zona
 
 Son las rutas de recolección por zona de Trujillo (`M-1`…`M-10`, `N-1`…`N-9`), en la tabla `zonas_ruta`. Cada ruta tiene **uno o más tramos** (1, 2, 3…), cada uno con sus sectores, su horario de recojo y el horario para sacar la basura. Hay **una fila por tramo** y la unicidad es **(codigo, tramo)**.

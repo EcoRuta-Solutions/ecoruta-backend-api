@@ -10,6 +10,7 @@ from app.models.conductor import Conductor
 from app.models.punto_critico import PuntoCritico
 from app.models.zona_ruta import ZonaRuta  # base existente: scripts/migrar_zonas_ruta_tramos.py
 from app.models.reporte_campo import ReporteCampo
+from app.models.alerta import Alerta
 
 Base.metadata.create_all(bind=engine)
 

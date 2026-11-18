@@ -20,6 +20,9 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 METODO_OSRM = "osrm"
 METODO_HAVERSINE = "haversine_aprox"
+# Algunos pares por calles (OSRM) y el resto aproximados (p. ej. un punto prototipo
+# que no está en la caché). Solo si se pide con permitir_mixta=True.
+METODO_MIXTO = "osrm_parcial"
 # Coordenadas con 6 decimales (~10 cm): si cambian, la caché ya no aplica a ese punto.
 DECIMALES = 6
 
@@ -94,10 +97,42 @@ def matriz_haversine(puntos: list[Punto]) -> list[list[float]]:
     ]
 
 
-def matriz_para_puntos(puntos: list[Punto], cache: dict | None = None) -> MatrizDistancias:
+def _mixta(puntos: list[Punto], cache: dict) -> list[list[float]] | None:
+    """OSRM donde la caché cubre el par; haversine × factor en el resto. None si no cubre nada."""
+    indice = {codigo: i for i, codigo in enumerate(cache["codigos"])}
+    coordenadas = cache.get("coordenadas", {})
+    posiciones = [
+        indice.get(p.codigo)
+        if coordenadas.get(p.codigo) == clave_coordenada(p.lat, p.lon)
+        else None
+        for p in puntos
+    ]
+    aproximada = matriz_haversine(puntos)
+    usados = 0
+    km = []
+    for a, i in enumerate(posiciones):
+        fila = []
+        for b, j in enumerate(posiciones):
+            valor = cache["distancias_m"][i][j] if i is not None and j is not None else None
+            if valor is None or a == b:
+                fila.append(aproximada[a][b])
+            else:
+                fila.append(valor / 1000)
+                usados += 1
+        km.append(fila)
+    return km if usados else None
+
+
+def matriz_para_puntos(
+    puntos: list[Punto], cache: dict | None = None, permitir_mixta: bool = False
+) -> MatrizDistancias:
     cache = cache if cache is not None else cargar_cache()
     if cache is not None:
         km = _desde_cache(puntos, cache)
         if km is not None:
             return MatrizDistancias(km=km, metodo=METODO_OSRM)
+        if permitir_mixta:
+            km = _mixta(puntos, cache)
+            if km is not None:
+                return MatrizDistancias(km=km, metodo=METODO_MIXTO)
     return MatrizDistancias(km=matriz_haversine(puntos), metodo=METODO_HAVERSINE)

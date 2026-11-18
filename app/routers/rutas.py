@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -21,9 +21,10 @@ from app.schemas.ruta import (
     RutaGeneradaOut,
     RutaGenerarRequest,
     RutaOut,
+    RutaMiaOut,
     RutasTurnoOut,
 )
-from app.services import generador_rutas, reportes_service
+from app.services import alertas_service, generador_rutas, reportes_service
 
 
 router = APIRouter(prefix="/rutas", tags=["Rutas"])
@@ -55,14 +56,14 @@ def _llenado_de_puntos(db: Session, ids: set[int]) -> dict[int, str]:
         return {}
     ultimo = reportes_service.ultimo_reporte_por_punto()
     filas = db.execute(
-        select(ultimo.c.punto_critico_id, ultimo.c.estado, ultimo.c.creado_en).where(
-            ultimo.c.punto_critico_id.in_(ids)
-        )
+        select(
+            ultimo.c.punto_critico_id, ultimo.c.estado, ultimo.c.creado_en, ultimo.c.origen
+        ).where(ultimo.c.punto_critico_id.in_(ids))
     ).all()
     momento = reportes_service.ahora()
     return {
-        punto_id: reportes_service.estado_llenado(estado, creado_en, momento)
-        for punto_id, estado, creado_en in filas
+        punto_id: reportes_service.estado_llenado(estado, creado_en, momento, origen)
+        for punto_id, estado, creado_en, origen in filas
     }
 
 
@@ -297,6 +298,63 @@ def generar_rutas(
     )
 
 
+def _a_ruta_generada_out(r) -> RutaGeneradaOut:
+    return RutaGeneradaOut(
+        ruta_id=r.ruta.id,
+        camion=CamionRutaOut(id=r.camion.id, placa=r.camion.placa),
+        conductor_id=r.ruta.conductor_id,
+        hora_inicio=r.ruta.hora_inicio,
+        hora_fin=r.ruta.hora_fin,
+        excede_turno=r.excede_turno,
+        distancia_km=r.ruta.distancia_km,
+        tiempo_estimado_min=r.ruta.tiempo_estimado_min,
+        paradas=[
+            ParadaGeneradaOut(
+                orden=orden,
+                punto_critico_id=p.id,
+                codigo=p.codigo,
+                lat=p.lat,
+                lon=p.lon,
+                direccion=p.direccion,
+            )
+            for orden, p in enumerate(r.paradas, start=1)
+        ],
+    )
+
+
+@router.post(
+    "/generar-mia",
+    response_model=RutaMiaOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def generar_mi_ruta(
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(require_roles("conductor")),
+):
+    """Ruta optimizada para el camión del conductor con todos los puntos llenos/desbordados.
+
+    409 si su camión ya tiene una ruta en proceso hoy (o no tiene camión);
+    422 si no hay puntos llenos. Reemplaza su ruta pendiente de hoy, si tiene.
+    """
+    ahora = datetime.now()  # hora local del servidor (America/Lima)
+    try:
+        resultado = generador_rutas.generar_ruta_conductor(db, usuario.id, ahora.date(), ahora)
+    except (generador_rutas.RutaEnCurso, generador_rutas.SinCamionAsignado) as error:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
+    except (generador_rutas.SinPuntos, generador_rutas.ParametroInvalido) as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error))
+
+    return RutaMiaOut(
+        nro_puntos=resultado.nro_puntos,
+        metodo_distancia=resultado.metodo_distancia,
+        rutas_reemplazadas=resultado.rutas_reemplazadas,
+        parametros=generador_rutas.parametros_usados(resultado.metodo_distancia),
+        ruta=_a_ruta_generada_out(resultado.ruta),
+    )
+
+
 @router.get(
     "/{ruta_id}",
     response_model=RutaOut,
@@ -407,6 +465,9 @@ def actualizar_parada(
         )
 
     parada.recolectado = datos.recolectado
+    if datos.recolectado and parada.punto_critico_id is not None:
+        # Recolectado: la alerta de contenedor lleno de ese punto queda resuelta.
+        alertas_service.resolver(db, parada.punto_critico_id, alertas_service.MOTIVO_RECOLECTADO)
     db.commit()
     db.refresh(parada)
     return parada

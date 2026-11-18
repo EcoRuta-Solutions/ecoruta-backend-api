@@ -166,3 +166,13 @@ class RutasTurnoOut(BaseModel):
     camiones_con_ruta_en_curso: list[str]
     parametros: ParametrosGeneracionOut
     rutas: list[RutaGeneradaOut]
+
+
+class RutaMiaOut(BaseModel):
+    """Respuesta de POST /rutas/generar-mia (una ruta para el camión del conductor)."""
+
+    nro_puntos: int
+    metodo_distancia: str = Field(description="osrm | osrm_parcial | haversine_aprox")
+    rutas_reemplazadas: int
+    parametros: ParametrosGeneracionOut
+    ruta: RutaGeneradaOut

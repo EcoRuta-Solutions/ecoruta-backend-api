@@ -40,6 +40,7 @@ COLUMNAS = (
     PuntoCritico.este_utm17s,
     PuntoCritico.norte_utm17s,
     PuntoCritico.creado_en,
+    PuntoCritico.es_prototipo,
 )
 
 
@@ -50,6 +51,8 @@ def _consulta_puntos():
         *COLUMNAS,
         ultimo.c.estado.label("ultimo_estado"),
         ultimo.c.creado_en.label("ultimo_creado_en"),
+        ultimo.c.origen.label("ultimo_origen"),
+        ultimo.c.nivel_pct.label("ultimo_nivel_pct"),
     ).outerjoin(ultimo, ultimo.c.punto_critico_id == PuntoCritico.id)
 
 
@@ -57,13 +60,19 @@ def _a_punto_out(fila, momento) -> PuntoCriticoOut:
     datos = dict(fila._mapping)
     estado = datos.pop("ultimo_estado")
     creado_en = datos.pop("ultimo_creado_en")
+    origen = datos.pop("ultimo_origen")
+    nivel_pct = datos.pop("ultimo_nivel_pct")
     return PuntoCriticoOut(
         **datos,
         ultimo_reporte=(
-            UltimoReporteBreve(estado=estado, creado_en=creado_en) if estado else None
+            UltimoReporteBreve(
+                estado=estado, creado_en=creado_en, origen=origen, nivel_pct=nivel_pct
+            )
+            if estado
+            else None
         ),
-        reporte_vigente=reportes_service.es_vigente(creado_en, momento),
-        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento),
+        reporte_vigente=reportes_service.es_vigente(creado_en, momento, origen),
+        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento, origen),
     )
 
 
@@ -98,11 +107,17 @@ def listar_puntos_criticos(
         description="min_lon,min_lat,max_lon,max_lat (WGS84)",
         examples=["-79.04,-8.12,-79.02,-8.10"],
     ),
+    incluir_prototipo: bool = Query(
+        default=False,
+        description="Incluir los puntos de prototipo (p. ej. PROTO-UTP) para el mapa",
+    ),
     limit: int = Query(default=50, ge=1, le=LIMITE_MAXIMO),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     filtros = []
+    if not incluir_prototipo:
+        filtros.append(PuntoCritico.es_prototipo.is_(False))
     if estado is not None:
         filtros.append(PuntoCritico.estado == estado)
     if prioridad is not None:
@@ -136,16 +151,16 @@ def listar_puntos_criticos(
 def resumen_puntos_criticos(db: Session = Depends(get_db)):
     por_estado = dict(
         db.execute(
-            select(PuntoCritico.estado, func.count()).group_by(
-                PuntoCritico.estado
-            )
+            select(PuntoCritico.estado, func.count())
+            .where(PuntoCritico.es_prototipo.is_(False))
+            .group_by(PuntoCritico.estado)
         ).all()
     )
     por_prioridad = dict(
         db.execute(
-            select(PuntoCritico.priorizacion_obligatoria, func.count()).group_by(
-                PuntoCritico.priorizacion_obligatoria
-            )
+            select(PuntoCritico.priorizacion_obligatoria, func.count())
+            .where(PuntoCritico.es_prototipo.is_(False))
+            .group_by(PuntoCritico.priorizacion_obligatoria)
         ).all()
     )
 
@@ -193,10 +208,11 @@ def ultimo_reporte_punto(codigo: str, db: Session = Depends(get_db)):
     momento = reportes_service.ahora()
     estado = fila.estado if fila else None
     creado_en = fila.creado_en if fila else None
+    origen = fila.origen if fila else None
     return UltimoReportePuntoOut(
         codigo=codigo,
-        reporte_vigente=reportes_service.es_vigente(creado_en, momento),
-        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento),
+        reporte_vigente=reportes_service.es_vigente(creado_en, momento, origen),
+        estado_llenado=reportes_service.estado_llenado(estado, creado_en, momento, origen),
         vigencia_horas=config.REPORTE_VIGENCIA_HORAS,
         reporte=ReporteCampoOut.model_validate(fila) if fila else None,
     )
