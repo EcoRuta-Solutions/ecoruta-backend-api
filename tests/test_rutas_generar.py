@@ -393,3 +393,49 @@ def test_mi_ruta_del_conductor_con_puntos_criticos(entorno):
 
     detalle = cliente.get(f"/rutas/{suya['ruta_id']}").json()
     assert len(detalle["paradas"]) == len(suya["paradas"])
+
+
+def test_mi_ruta_devuelve_solo_la_ruta_del_camion_del_conductor(entorno):
+    """Regresión "Mi ruta de hoy": cada conductor ve solo la ruta de SU camión.
+
+    rutas.conductor_id guarda el id del USUARIO del conductor (no conductores.id).
+    """
+    cliente, Sesion, _, _, _ = entorno
+    with Sesion() as db:
+        usuarios = {}
+        for nombre in ("daniel", "otro", "sin_camion"):
+            u = Usuario(email=f"{nombre}@prueba.test", nombre=nombre, password_hash="x", rol="conductor")
+            db.add(u)
+            db.flush()
+            usuarios[nombre] = u.id
+        camiones = {c.placa: c.id for c in db.query(Camion)}
+        # Ids de conductores distintos de los de usuarios, como en la base real (conductor 1 -> usuario 11).
+        db.add(Conductor(nombre="Daniel", usuario_id=usuarios["daniel"], camion_id=camiones["CAM-M01"]))
+        db.add(Conductor(nombre="Otro", usuario_id=usuarios["otro"], camion_id=camiones["CAM-M02"]))
+        db.add(Conductor(nombre="Sin camión", usuario_id=usuarios["sin_camion"]))
+        # Ruta vieja de otro camión, completada, sin conductor: no debe aparecer.
+        db.add(Ruta(fecha_inicio=date(2026, 10, 15), fecha_fin=date(2026, 10, 15),
+                    hora_inicio=datetime(2026, 10, 15, 5), hora_fin=datetime(2026, 10, 15, 13),
+                    camion_id=camiones["CAM-M03"], estado="Completado"))
+        db.commit()
+
+    generada = generar(cliente).json()
+    ruta_de = {r["camion"]["placa"]: r for r in generada["rutas"]}
+    assert ruta_de["CAM-M01"]["conductor_id"] == usuarios["daniel"]
+    assert ruta_de["CAM-M02"]["conductor_id"] == usuarios["otro"]
+    assert ruta_de["CAM-M03"]["conductor_id"] is None
+
+    def mias(nombre):
+        token = create_access_token(usuarios[nombre], "conductor")
+        respuesta = cliente.get("/rutas/mias", headers={"Authorization": f"Bearer {token}"})
+        assert respuesta.status_code == 200
+        return respuesta.json()
+
+    for nombre, placa in (("daniel", "CAM-M01"), ("otro", "CAM-M02")):
+        rutas = mias(nombre)
+        assert [r["id"] for r in rutas] == [ruta_de[placa]["ruta_id"]]
+        assert rutas[0]["camion"]["placa"] == placa  # nada de otros camiones
+        assert rutas[0]["fecha_inicio"] == FECHA.isoformat()
+        assert len(rutas[0]["paradas"]) == len(ruta_de[placa]["paradas"]) > 0
+        assert all(p["punto_critico"] is not None for p in rutas[0]["paradas"])
+    assert mias("sin_camion") == []
