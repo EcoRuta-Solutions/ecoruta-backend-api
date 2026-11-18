@@ -40,7 +40,7 @@ uvicorn app.main:app --reload
 
 La documentación interactiva queda en `http://127.0.0.1:8000/docs` (botón **Authorize** para iniciar sesión).
 
-Solo hay dos roles: `municipalidad` y `conductor`. No existe registro público: los usuarios se crean con `python scripts/crear_usuarios_demo.py` (cuentas demo de ambos roles) o directamente en la base, siempre con el rol explícito.
+Solo hay dos roles: `municipalidad` y `conductor`. No existe registro público ni un endpoint para crear usuarios. Las **cuentas reales** se crean con `scripts/crear_usuario.py` (ver [Crear cuentas reales](#crear-cuentas-reales)) y las cuentas demo, con `python scripts/crear_usuarios_demo.py`.
 
 ## Roles
 
@@ -54,6 +54,26 @@ python scripts\eliminar_reportes_ciudadanos.py --confirmar  # ejecuta los cambio
 ```
 
 El script borra la tabla y después solo las cuentas listadas en `CUENTAS_DEMO`; si quedan otros usuarios `ciudadano`, lo avisa para revisarlos a mano.
+
+## Crear cuentas reales
+
+`scripts/crear_usuario.py` crea una cuenta real, con `es_demo = false` y `activo = true`:
+
+```powershell
+.\venv\Scripts\python.exe scripts\crear_usuario.py --nombre "Nombre Apellido" --correo nombre.apellido@dominio.pe --rol conductor
+```
+
+- **La contraseña se pide por teclado** dos veces y no se ve al escribirla (`getpass`). Debe tener al menos 8 caracteres y como máximo 72 bytes, el límite de bcrypt.
+- **El script no acepta la contraseña por argumento ni por variable de entorno, y nunca la imprime.** No queda en el código, en el historial de la terminal ni en los logs: solo se guarda su hash, con la misma función que usa el login (`app.core.security.hash_password`).
+- `--rol` es `municipalidad` o `conductor`. El correo se valida y se guarda en minúsculas, igual que lo busca el login.
+- Al terminar imprime solo el id, el nombre, el correo y el rol.
+- Si el correo ya existe, avisa y no cambia nada. Para cambiar la contraseña de una cuenta existente (solo la contraseña):
+
+```powershell
+.\venv\Scripts\python.exe scripts\crear_usuario.py --correo nombre.apellido@dominio.pe --actualizar-clave
+```
+
+Para que un conductor vea sus rutas en "Mi ruta", hay que vincularlo a su camión en `/flota/conductores` (`usuario_id` y `camion_id`).
 
 ## Endpoints y protección
 
