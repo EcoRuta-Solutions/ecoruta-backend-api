@@ -587,3 +587,86 @@ def comparar_optimizadores(
         "diferencia_km": diferencia,
         "mejor_metodo": mejor_metodo,
     }
+
+
+def repartir_en_rutas(
+    matriz_km: Sequence[Sequence[float]],
+    nro_vehiculos: int,
+    max_paradas_por_ruta: int,
+    tiempo_maximo_segundos: int = 10,
+) -> list[list[int]]:
+    """
+    Reparte N puntos entre varios vehículos minimizando la distancia total.
+
+    - Cada vehículo visita como máximo `max_paradas_por_ruta` puntos (el
+      equilibrio se hace por número de paradas: no hay pesos por punto).
+    - No hay depósito conocido: se usa un nodo ficticio con distancia 0, así
+      cada ruta empieza y termina donde convenga (camino abierto). La distancia
+      no incluye ir desde la base ni hasta el relleno.
+    - `matriz_km[i][j]` es la distancia del punto i al j (puede ser asimétrica).
+
+    Devuelve, por vehículo, la lista de índices de puntos en orden de visita
+    (listas vacías para los vehículos que no se usan).
+    """
+    cantidad = len(matriz_km)
+    if nro_vehiculos <= 0:
+        raise ValueError("nro_vehiculos debe ser mayor que cero")
+    if cantidad == 0:
+        return [[] for _ in range(nro_vehiculos)]
+    if max_paradas_por_ruta * nro_vehiculos < cantidad:
+        raise ValueError(
+            "max_paradas_por_ruta × nro_vehiculos no alcanza para todos los puntos"
+        )
+    if tiempo_maximo_segundos <= 0:
+        raise ValueError("tiempo_maximo_segundos debe ser mayor que cero")
+
+    # Índice 0: depósito ficticio; 1..N: puntos.
+    costos = [[0] * (cantidad + 1) for _ in range(cantidad + 1)]
+    for i in range(cantidad):
+        for j in range(cantidad):
+            costos[i + 1][j + 1] = int(round(matriz_km[i][j] * METROS_POR_KILOMETRO))
+
+    manager = pywrapcp.RoutingIndexManager(cantidad + 1, nro_vehiculos, 0)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def distancia_callback(from_index: int, to_index: int) -> int:
+        return costos[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+
+    transito = routing.RegisterTransitCallback(distancia_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transito)
+
+    def parada_callback(from_index: int) -> int:
+        return 0 if manager.IndexToNode(from_index) == 0 else 1
+
+    paradas = routing.RegisterUnaryTransitCallback(parada_callback)
+    routing.AddDimensionWithVehicleCapacity(
+        paradas, 0, [max_paradas_por_ruta] * nro_vehiculos, True, "Paradas"
+    )
+
+    parametros = pywrapcp.DefaultRoutingSearchParameters()
+    parametros.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )
+    parametros.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    )
+    parametros.time_limit.seconds = tiempo_maximo_segundos
+
+    solucion = routing.SolveWithParameters(parametros)
+    if solucion is None:
+        raise RuntimeError("OR-Tools no pudo repartir los puntos entre los camiones")
+
+    rutas = []
+    for vehiculo in range(nro_vehiculos):
+        orden = []
+        index = solucion.Value(routing.NextVar(routing.Start(vehiculo)))
+        while not routing.IsEnd(index):
+            orden.append(manager.IndexToNode(index) - 1)
+            index = solucion.Value(routing.NextVar(index))
+        rutas.append(orden)
+    return rutas
+
+
+def distancia_camino_km(matriz_km: Sequence[Sequence[float]], orden: Sequence[int]) -> float:
+    """Distancia de recorrer `orden` de punta a punta (sin volver al inicio)."""
+    return sum(matriz_km[a][b] for a, b in zip(orden, orden[1:]))

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_roles
-from app.core.turnos import Turno, normalizar_turno
+from app.core.turnos import normalizar_turno
 from app.database import get_db
 from app.models.zona_ruta import ZonaRuta
 from app.schemas.zona_ruta import ZonaRutaOut
@@ -15,19 +15,18 @@ router = APIRouter(
     dependencies=[Depends(require_roles("municipalidad", "conductor"))],
 )
 
-_ORDEN_TURNO = {turno.value: posicion for posicion, turno in enumerate(Turno)}
 _PATRON_CODIGO = re.compile(r"^([A-Za-z]+)-?(\d+)$")
 
 
 def _clave_orden(zona: ZonaRuta):
-    """Ordena por turno y luego por código natural (M-2 antes que M-10)."""
+    """Ordena por código natural (M-2 antes que M-10) y luego por tramo."""
     coincidencia = _PATRON_CODIGO.match(zona.codigo)
     codigo = (
         (coincidencia.group(1).upper(), int(coincidencia.group(2)))
         if coincidencia
         else (zona.codigo, 0)
     )
-    return _ORDEN_TURNO.get(zona.turno, len(_ORDEN_TURNO)), codigo
+    return codigo, zona.tramo
 
 
 @router.get("", response_model=list[ZonaRutaOut])
@@ -37,6 +36,7 @@ def listar_zonas_ruta(
     ),
     db: Session = Depends(get_db),
 ):
+    """Una fila por tramo, ordenada por código de ruta y tramo."""
     consulta = db.query(ZonaRuta)
     if turno is not None:
         turno_normalizado = normalizar_turno(turno)
@@ -50,13 +50,15 @@ def listar_zonas_ruta(
     return sorted(consulta.all(), key=_clave_orden)
 
 
-@router.get("/{codigo}", response_model=ZonaRutaOut)
-def detalle_zona_ruta(codigo: str, db: Session = Depends(get_db)):
-    zona = (
+@router.get("/{codigo}", response_model=list[ZonaRutaOut])
+def tramos_de_zona_ruta(codigo: str, db: Session = Depends(get_db)):
+    """Todos los tramos de una ruta, en orden de tramo."""
+    tramos = (
         db.query(ZonaRuta)
         .filter(ZonaRuta.codigo == codigo.strip().upper())
-        .first()
+        .order_by(ZonaRuta.tramo)
+        .all()
     )
-    if zona is None:
+    if not tramos:
         raise HTTPException(status_code=404, detail="Zona de ruta no encontrada")
-    return zona
+    return tramos

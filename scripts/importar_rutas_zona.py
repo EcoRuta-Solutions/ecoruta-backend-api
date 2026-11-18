@@ -1,22 +1,26 @@
 r"""Importa las rutas de recolección por zona de Trujillo (tabla `zonas_ruta`).
 
-Lee `data/rutas_zona_trujillo.csv` con las columnas:
+Lee `data/rutas_zona_trujillo.csv`, con UNA FILA POR TRAMO y las columnas:
     ruta, turno, tramo, sectores, recojo_inicio, recojo_fin,
     sacar_basura_inicio, sacar_basura_fin
 y una columna opcional `revisar` (true/false, si/no, 1/0) para marcar datos dudosos.
 
+- `tramo` es un entero >= 1. Cada (ruta, tramo) es una fila; repetir el mismo
+  (ruta, tramo) en el archivo se rechaza. Todos los tramos de una ruta deben
+  tener el mismo turno.
 - Horas en formato 24 h (HH:MM). "24:00" se guarda como 00:00 (medianoche).
 - `turno` acepta manana/mañana/tarde/noche y se guarda como manana|tarde|noche.
 - `cruza_medianoche` se calcula: el recojo termina después de la medianoche
   (recojo_fin < recojo_inicio y recojo_fin distinto de 00:00).
-- `revisar` queda en true si el CSV lo pide o si el código está en
-  CODIGOS_REVISAR (N-9: el listado impreso tiene un hueco 23:00–24:00; se
-  importa tal cual).
+- `revisar` queda en true si esa fila lo pide en el CSV o si el código está en
+  CODIGOS_REVISAR (N-9, en todos sus tramos: el listado impreso tiene un hueco
+  23:00–24:00; se importa tal cual).
 - Las filas inválidas se reportan y se saltan; no detienen la importación.
-- No inventa datos: tramo, sectores y el horario para sacar la basura quedan
-  vacíos si el CSV no los trae.
+- No inventa datos: sectores y el horario para sacar la basura quedan vacíos si
+  el CSV no los trae.
 
-Es idempotente: actualiza por código de ruta. Crea la tabla si no existe.
+Es idempotente: actualiza por (ruta, tramo). Antes aplica
+scripts/migrar_zonas_ruta_tramos.py (crea la tabla si no existe).
 
 Uso:
     .\venv\Scripts\python.exe scripts\importar_rutas_zona.py
@@ -34,10 +38,14 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import func, literal_column, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
+
+from migrar_zonas_ruta_tramos import TramosInvalidos
+from migrar_zonas_ruta_tramos import migrar as migrar_tramos
 
 from app.core.turnos import Turno, normalizar_turno
 from app.models.zona_ruta import ZonaRuta
@@ -70,7 +78,6 @@ VALORES_BOOL = {
 
 CAMPOS_ACTUALIZABLES = (
     "turno",
-    "tramo",
     "sectores",
     "recojo_inicio",
     "recojo_fin",
@@ -109,9 +116,11 @@ class ResultadoImportacion:
     actualizadas: int
     sin_cambios: int
     rechazadas: list[FilaRechazada]
-    total: int
-    por_turno: dict[str, int]
-    revisar: int
+    total_tramos: int
+    total_rutas: int
+    # Rutas distintas por turno (cuenta rutas, no tramos).
+    rutas_por_turno: dict[str, int]
+    tramos_por_revisar: int
 
 
 def parsear_hora(valor: str | None, nombre: str, obligatoria: bool) -> time | None:
@@ -144,6 +153,15 @@ def parsear_revisar(valor: str | None) -> bool:
     return VALORES_BOOL[texto]
 
 
+def parsear_tramo(valor: str | None) -> int:
+    texto = (valor or "").strip()
+    if not texto:
+        raise ValueError("tramo vacío")
+    if not texto.isdigit() or int(texto) < 1:
+        raise ValueError(f"tramo debe ser un entero >= 1: {valor!r}")
+    return int(texto)
+
+
 def validar_fila(fila: dict) -> dict:
     """Devuelve los datos listos para guardar o lanza ValueError con el motivo."""
     codigo = (fila.get("ruta") or "").strip().upper()
@@ -166,7 +184,7 @@ def validar_fila(fila: dict) -> dict:
     return {
         "codigo": codigo,
         "turno": turno.value,
-        "tramo": (fila.get("tramo") or "").strip() or None,
+        "tramo": parsear_tramo(fila.get("tramo")),
         "sectores": (fila.get("sectores") or "").strip() or None,
         "recojo_inicio": recojo_inicio,
         "recojo_fin": recojo_fin,
@@ -186,7 +204,8 @@ def leer_csv(ruta: Path) -> LecturaCsv:
         )
 
     lectura = LecturaCsv()
-    codigos_vistos: set[str] = set()
+    claves_vistas: set[tuple[str, int]] = set()
+    turno_de_ruta: dict[str, str] = {}
 
     with open(ruta, encoding="utf-8-sig", newline="") as archivo:
         lector = csv.DictReader(archivo)
@@ -198,21 +217,28 @@ def leer_csv(ruta: Path) -> LecturaCsv:
             codigo = (fila.get("ruta") or "").strip().upper()
             try:
                 datos = validar_fila(fila)
-                if codigo in codigos_vistos:
-                    raise ValueError("ruta repetida en el archivo")
+                clave = (datos["codigo"], datos["tramo"])
+                if clave in claves_vistas:
+                    raise ValueError(f"tramo {datos['tramo']} repetido para la ruta en el archivo")
+                turno_previo = turno_de_ruta.get(datos["codigo"])
+                if turno_previo is not None and turno_previo != datos["turno"]:
+                    raise ValueError(
+                        f"turno {datos['turno']} distinto al de los otros tramos ({turno_previo})"
+                    )
             except ValueError as error:
-                lectura.rechazadas.append(
-                    FilaRechazada(lector.line_num, codigo, str(error))
-                )
+                tramo_texto = (fila.get("tramo") or "").strip()
+                etiqueta = f"{codigo} tramo {tramo_texto}" if tramo_texto else codigo
+                lectura.rechazadas.append(FilaRechazada(lector.line_num, etiqueta, str(error)))
                 continue
-            codigos_vistos.add(codigo)
+            claves_vistas.add(clave)
+            turno_de_ruta[datos["codigo"]] = datos["turno"]
             lectura.validas.append(datos)
 
     return lectura
 
 
 def guardar(engine: Engine, filas: list[dict]) -> tuple[int, int]:
-    """Inserta o actualiza por código. Devuelve (creadas, actualizadas)."""
+    """Inserta o actualiza por (codigo, tramo). Devuelve (creadas, actualizadas)."""
     if not filas:
         return 0, 0
 
@@ -220,7 +246,7 @@ def guardar(engine: Engine, filas: list[dict]) -> tuple[int, int]:
     sentencia = insert(ZonaRuta).values(filas)
     nuevos = sentencia.excluded
     sentencia = sentencia.on_conflict_do_update(
-        index_elements=[tabla.c.codigo],
+        constraint="uq_zonas_ruta_codigo_tramo",
         set_={c: nuevos[c] for c in CAMPOS_ACTUALIZABLES},
         # Solo reescribe filas que cambiaron, para distinguir "sin cambios".
         where=tuple_(*(tabla.c[c] for c in CAMPOS_ACTUALIZABLES)).is_distinct_from(
@@ -235,27 +261,36 @@ def guardar(engine: Engine, filas: list[dict]) -> tuple[int, int]:
     return creadas, len(insertadas) - creadas
 
 
-def contar(engine: Engine) -> tuple[dict[str, int], int]:
+def contar(engine: Engine) -> dict:
+    """Totales de la tabla: tramos, rutas distintas, rutas por turno y tramos por revisar."""
     with engine.connect() as conexion:
-        por_turno = Counter(
+        rutas_por_turno = Counter(
             dict(
                 conexion.execute(
-                    select(ZonaRuta.turno, func.count()).group_by(ZonaRuta.turno)
+                    select(ZonaRuta.turno, func.count(func.distinct(ZonaRuta.codigo))).group_by(
+                        ZonaRuta.turno
+                    )
                 ).all()
             )
         )
+        total_tramos = conexion.scalar(select(func.count()).select_from(ZonaRuta))
+        total_rutas = conexion.scalar(select(func.count(func.distinct(ZonaRuta.codigo))))
         revisar = conexion.scalar(
             select(func.count()).select_from(ZonaRuta).where(ZonaRuta.revisar)
         )
-    return {t.value: por_turno[t.value] for t in Turno}, revisar
+    return {
+        "total_tramos": total_tramos,
+        "total_rutas": total_rutas,
+        "rutas_por_turno": {t.value: rutas_por_turno[t.value] for t in Turno},
+        "tramos_por_revisar": revisar,
+    }
 
 
 def importar(engine: Engine, ruta: Path) -> ResultadoImportacion:
     lectura = leer_csv(ruta)  # falla antes de tocar la base si no hay archivo
-    ZonaRuta.__table__.create(engine, checkfirst=True)
+    migrar_tramos(engine)  # crea la tabla o la lleva a (codigo, tramo)
 
     creadas, actualizadas = guardar(engine, lectura.validas)
-    por_turno, revisar = contar(engine)
 
     return ResultadoImportacion(
         leidas=lectura.leidas,
@@ -263,9 +298,7 @@ def importar(engine: Engine, ruta: Path) -> ResultadoImportacion:
         actualizadas=actualizadas,
         sin_cambios=len(lectura.validas) - creadas - actualizadas,
         rechazadas=lectura.rechazadas,
-        total=sum(por_turno.values()),
-        por_turno=por_turno,
-        revisar=revisar,
+        **contar(engine),
     )
 
 
@@ -283,7 +316,7 @@ def main() -> None:
 
     try:
         resultado = importar(engine, args.archivo)
-    except (ArchivoNoEncontrado, ValueError) as error:
+    except (ArchivoNoEncontrado, ValueError, TramosInvalidos) as error:
         raise SystemExit(f"ERROR: {error}")
 
     print(f"Archivo: {args.archivo}")
@@ -298,11 +331,11 @@ def main() -> None:
             f"{rechazada.motivo}"
         )
 
-    print(f"\nEn la tabla zonas_ruta: {resultado.total}")
-    print("Por turno:")
-    for turno, cantidad in resultado.por_turno.items():
+    print(f"\nEn la tabla zonas_ruta: {resultado.total_rutas} rutas, {resultado.total_tramos} tramos")
+    print("Rutas por turno:")
+    for turno, cantidad in resultado.rutas_por_turno.items():
         print(f"  {turno}: {cantidad}")
-    print(f"Por revisar (revisar=true): {resultado.revisar}")
+    print(f"Tramos por revisar (revisar=true): {resultado.tramos_por_revisar}")
 
 
 if __name__ == "__main__":

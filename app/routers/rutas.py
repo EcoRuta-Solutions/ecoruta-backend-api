@@ -1,10 +1,10 @@
-from datetime import date, datetime, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.deps import get_current_user, require_roles
-from app.core.turnos import normalizar_turno
 from app.database import get_db
 from app.models.camion import Camion
 from app.models.nodo import Nodo
@@ -12,15 +12,18 @@ from app.models.ruta import Parada, Ruta
 from app.models.usuario import Usuario
 from app.routers.panel import obtener_estados
 from app.schemas.ruta import (
+    CamionRutaOut,
+    ParadaGeneradaOut,
     ParadaOut,
     ParadaUpdate,
     RutaCreate,
     RutaEstadoUpdate,
-    RutaGenerarOut,
+    RutaGeneradaOut,
     RutaGenerarRequest,
     RutaOut,
+    RutasTurnoOut,
 )
-from app.services.optimizador_service import comparar_optimizadores
+from app.services import generador_rutas, reportes_service
 
 
 router = APIRouter(prefix="/rutas", tags=["Rutas"])
@@ -46,6 +49,23 @@ _PRIORIDAD_POR_ESTADO = {
 }
 
 
+def _llenado_de_puntos(db: Session, ids: set[int]) -> dict[int, str]:
+    """estado_llenado vigente (o "sin_datos") de cada punto crítico pedido."""
+    if not ids:
+        return {}
+    ultimo = reportes_service.ultimo_reporte_por_punto()
+    filas = db.execute(
+        select(ultimo.c.punto_critico_id, ultimo.c.estado, ultimo.c.creado_en).where(
+            ultimo.c.punto_critico_id.in_(ids)
+        )
+    ).all()
+    momento = reportes_service.ahora()
+    return {
+        punto_id: reportes_service.estado_llenado(estado, creado_en, momento)
+        for punto_id, estado, creado_en in filas
+    }
+
+
 def _enriquecer_llenado(db: Session, rutas: list[Ruta]) -> None:
     """Adjunta el último llenado y la prioridad a cada nodo de las paradas.
 
@@ -53,9 +73,17 @@ def _enriquecer_llenado(db: Session, rutas: list[Ruta]) -> None:
     contenedor sin pedir un endpoint adicional por parada.
     """
     estados = {estado.id: estado for estado in obtener_estados(db)}
+    llenado_puntos = _llenado_de_puntos(
+        db,
+        {p.punto_critico_id for r in rutas for p in r.paradas if p.punto_critico_id},
+    )
 
     for ruta in rutas:
         for parada in ruta.paradas:
+            if parada.punto_critico is not None:
+                parada.punto_critico.estado_llenado = llenado_puntos.get(
+                    parada.punto_critico_id, reportes_service.SIN_DATOS
+                )
             nodo = parada.nodo
             if nodo is None:
                 continue
@@ -159,6 +187,7 @@ def mis_rutas(
     consulta = db.query(Ruta).options(
         joinedload(Ruta.camion),
         selectinload(Ruta.paradas).joinedload(Parada.nodo),
+            selectinload(Ruta.paradas).joinedload(Parada.punto_critico),
     )
 
     if usuario.rol == "conductor":
@@ -184,6 +213,7 @@ def rutas_del_dia(db: Session = Depends(get_db)):
         .options(
             joinedload(Ruta.camion),
             selectinload(Ruta.paradas).joinedload(Parada.nodo),
+            selectinload(Ruta.paradas).joinedload(Parada.punto_critico),
         )
         .filter(Ruta.fecha_inicio <= hoy, Ruta.fecha_fin >= hoy)
         .order_by(Ruta.id)
@@ -195,142 +225,76 @@ def rutas_del_dia(db: Session = Depends(get_db)):
 
 @router.post(
     "/generar",
-    response_model=RutaGenerarOut,
+    response_model=RutasTurnoOut,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_roles("municipalidad"))],
 )
-def generar_ruta(
+def generar_rutas(
     datos: RutaGenerarRequest,
     db: Session = Depends(get_db),
 ):
-    camion = db.get(Camion, datos.camion_id)
+    """Genera las rutas de un turno con los puntos críticos reales y la flota real.
 
-    if camion is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Camión no encontrado",
-        )
-
-    _validar_conductor(db, datos.conductor_id)
-
-    turno = normalizar_turno(camion.turno)
-
-    if turno is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="El camión tiene un turno inválido",
-        )
-
-    # Horario del turno según app/core/turnos.py; la noche termina al día siguiente.
-    hora_inicio = datetime.combine(datos.fecha, turno.inicio)
-    hora_fin = datetime.combine(datos.fecha, turno.fin)
-    if turno.cruza_medianoche:
-        hora_fin += timedelta(days=1)
-
-    existente = (
-        db.query(Ruta)
-        .filter(
-            Ruta.camion_id == datos.camion_id,
-            Ruta.fecha_inicio == datos.fecha,
-        )
-        .first()
-    )
-
-    if existente is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="El camión ya tiene una ruta para esa fecha",
-        )
-
-    criticos = sorted(
-        (n for n in obtener_estados(db) if n.estado == "critico"),
-        key=lambda n: n.id,
-    )
-
-    if not criticos:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No hay nodos críticos que recolectar",
-        )
-
-    if datos.inicio_id is None:
-        # Por defecto se inicia en el nodo más lleno.
-        indice_inicio = max(
-            range(len(criticos)),
-            key=lambda i: criticos[i].fill_pct,
-        )
-    else:
-        indices = [
-            i for i, n in enumerate(criticos) if n.id == datos.inicio_id
-        ]
-
-        if not indices:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="El nodo de inicio no es un nodo crítico",
-            )
-
-        indice_inicio = indices[0]
-
+    Reemplaza las rutas pendientes de ese turno y fecha; no toca las que están
+    en curso o completadas. Ver app/services/generador_rutas.py.
+    """
     try:
-        comparacion = comparar_optimizadores(
-            criticos,
-            indice_inicio=indice_inicio,
-            tiempo_maximo_segundos=3,
+        resultado = generador_rutas.generar_rutas_turno(
+            db,
+            turno=datos.turno,
+            fecha=datos.fecha or date.today(),
+            solo_prioritarios=datos.solo_prioritarios,
+            solo_con_reporte_lleno=datos.solo_con_reporte_lleno,
+            incluir_reserva=datos.incluir_reserva,
+            max_paradas_por_ruta=datos.max_paradas_por_ruta,
         )
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"No se pudo optimizar la ruta: {error}",
-        )
-
-    if comparacion["mejor_metodo"] == "clarke_wright_tabu":
-        metodo = "clarke_wright_tabu"
-        orden = comparacion["ruta_heuristica"]
-        distancia = comparacion["distancia_heuristica_km"]
-    else:
-        metodo = "ortools"
-        orden = comparacion["ruta_ortools"]
-        distancia = comparacion["distancia_ortools_km"]
-
-    nueva_ruta = Ruta(
-        fecha_inicio=datos.fecha,
-        fecha_fin=hora_fin.date(),
-        hora_inicio=hora_inicio,
-        hora_fin=hora_fin,
-        camion_id=datos.camion_id,
-        conductor_id=datos.conductor_id,
-        estado="Pendiente",
-    )
-
-    try:
-        db.add(nueva_ruta)
-        db.flush()
-
-        for posicion, nodo_id in enumerate(orden, start=1):
-            db.add(
-                Parada(
-                    ruta_id=nueva_ruta.id,
-                    nodo_id=nodo_id,
-                    orden=posicion,
-                )
-            )
-
-        db.commit()
-        db.refresh(nueva_ruta)
-
-    except Exception:
+    except generador_rutas.SinCamiones as error:
         db.rollback()
-        raise
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
+    except generador_rutas.SinPuntos as error:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
+    except generador_rutas.ParametroInvalido as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error))
 
-    _enriquecer_llenado(db, [nueva_ruta])
-    return {
-        "ruta": nueva_ruta,
-        "metodo": metodo,
-        "distancia_km": distancia,
-        "distancia_ortools_km": comparacion["distancia_ortools_km"],
-        "distancia_heuristica_km": comparacion["distancia_heuristica_km"],
-    }
+    return RutasTurnoOut(
+        turno=resultado.turno,
+        fecha=resultado.fecha,
+        nro_camiones=resultado.nro_camiones,
+        nro_puntos=resultado.nro_puntos,
+        max_paradas_por_ruta=resultado.max_paradas_por_ruta,
+        metodo_distancia=resultado.metodo_distancia,
+        distancia_total_km=round(resultado.distancia_total_km, 3),
+        tiempo_total_min=round(sum(r.ruta.tiempo_estimado_min for r in resultado.rutas), 1),
+        rutas_reemplazadas=resultado.rutas_reemplazadas,
+        camiones_con_ruta_en_curso=resultado.camiones_con_ruta_en_curso,
+        parametros=generador_rutas.parametros_usados(resultado.metodo_distancia),
+        rutas=[
+            RutaGeneradaOut(
+                ruta_id=r.ruta.id,
+                camion=CamionRutaOut(id=r.camion.id, placa=r.camion.placa),
+                conductor_id=r.ruta.conductor_id,
+                hora_inicio=r.ruta.hora_inicio,
+                hora_fin=r.ruta.hora_fin,
+                excede_turno=r.excede_turno,
+                distancia_km=r.ruta.distancia_km,
+                tiempo_estimado_min=r.ruta.tiempo_estimado_min,
+                paradas=[
+                    ParadaGeneradaOut(
+                        orden=orden,
+                        punto_critico_id=p.id,
+                        codigo=p.codigo,
+                        lat=p.lat,
+                        lon=p.lon,
+                        direccion=p.direccion,
+                    )
+                    for orden, p in enumerate(r.paradas, start=1)
+                ],
+            )
+            for r in resultado.rutas
+        ],
+    )
 
 
 @router.get(
@@ -346,6 +310,7 @@ def detalle_ruta(ruta_id: int, db: Session = Depends(get_db)):
         .options(
             joinedload(Ruta.camion),
             selectinload(Ruta.paradas).joinedload(Parada.nodo),
+            selectinload(Ruta.paradas).joinedload(Parada.punto_critico),
         )
         .filter(Ruta.id == ruta_id)
         .first()
