@@ -11,9 +11,13 @@ class Conductor(Base):
     telefono = Column(String, nullable=False, default="")
     categoria_licencia = Column(String, nullable=False, default="A-IIb")
     estado = Column(String, nullable=False, default="disponible")  # disponible, en_ruta, descanso
-    # Heredado: apunta a la tabla vieja `vehiculos`. Ya no se escribe desde la API;
-    # scripts/vincular_conductores_camion.py lo usa para llenar camion_id por placa.
-    vehiculo_id = Column(Integer, ForeignKey("vehiculos.id"), nullable=True)
+    # Heredado: id de la tabla vieja `vehiculos`. Ya no se escribe desde la API;
+    # scripts/vincular_conductores_camion.py lo usa (con SQL) para llenar camion_id
+    # por placa. Sin ForeignKey en el ORM: el modelo Vehiculo ya no se carga en la
+    # app, y declararla rompía el flush de Conductor (NoReferencedTableError).
+    # La FK que pueda existir en la base no se toca.
+    vehiculo_id = Column(Integer, nullable=True)
+    # Relación vigente.
     camion_id = Column(Integer, ForeignKey("camiones.id"), nullable=True, index=True)
     activo = Column(Boolean, nullable=False, default=True)
     # True para los conductores de seed_demo.py.
