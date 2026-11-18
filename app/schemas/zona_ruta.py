@@ -11,7 +11,7 @@ class ZonaRutaOut(BaseModel):
     id: int
     codigo: str
     turno: Turno
-    tramo: str | None
+    tramo: int
     sectores: str | None
     recojo_inicio: time
     recojo_fin: time

@@ -34,6 +34,7 @@ Después:
 ```powershell
 python crear_tablas.py
 python scripts\migrar_unificar_flota.py   # base ya existente: agrega columnas nuevas (create_all no las agrega)
+python scripts\migrar_rutas_puntos_criticos.py   # base ya existente: paradas con punto crítico y datos de turno en rutas
 uvicorn app.main:app --reload
 ```
 
@@ -171,7 +172,7 @@ python scripts\cargar_flota_turnos.py --capacidad-toneladas 12.5  # solo cuando 
 
 `seed_demo.py` solo reemplaza lo demo (ver [Datos demo](#datos-demo-seed-y-limpieza)). No toca la flota provisional ni `puntos_criticos`.
 
-`POST /rutas/generar` usa el horario del turno del camión según `app/core/turnos.py` (05:00–13:00, 13:00–21:00 y 21:00–05:00 del día siguiente).
+`POST /rutas/generar` genera las rutas de todo un turno con la flota de ese turno (ver [Rutas por turno](#rutas-por-turno-con-datos-reales-post-rutasgenerar)), con el horario de `app/core/turnos.py`.
 
 Endpoints:
 
@@ -185,27 +186,108 @@ Endpoints:
 - `GET /camiones` acepta los filtros opcionales `?turno=manana|tarde|noche` y `?estado=operativo|reserva|mantenimiento`. El filtro de turno también encuentra los demo, que se guardan como "Mañana". Sin filtros responde igual que antes, y cada camión trae ahora los campos nuevos.
 - `PATCH /camiones/{id}/estado` recibe un cuerpo como `{"estado": "mantenimiento", "activar_reserva": true}`. Con `activar_reserva`, la primera reserva del mismo turno pasa a `operativo`. Si no hay ninguna, responde 409 y no cambia nada. Si el camión no está operativo o el turno no es válido, responde 422.
 
-## Rutas por zona
+## Rutas por turno con datos reales (`POST /rutas/generar`)
 
-Son las rutas de recolección por zona de Trujillo (`M-1`, `T-3`, `N-9`…), con su turno, tramo, sectores, horario de recojo y horario para sacar la basura. Viven en la tabla `zonas_ruta`.
+Genera las rutas de un turno con los **puntos críticos reales** y la **flota real** del turno. Las paradas apuntan a `puntos_criticos` (`paradas.punto_critico_id`); las rutas viejas con nodos siguen funcionando.
 
-**El CSV oficial todavía no está en el repo.** Va en `data/rutas_zona_trujillo.csv` con las columnas `ruta, turno, tramo, sectores, recojo_inicio, recojo_fin, sacar_basura_inicio, sacar_basura_fin` y, opcionalmente, `revisar` (`true`/`false`). Las horas van en formato 24 h (`HH:MM`; `24:00` se guarda como `00:00`). Mientras falte, el importador termina con un error claro y no toca la base.
+Preparación (una vez, en una base existente; no borra datos y puede correrse varias veces):
 
 ```powershell
-python crear_tablas.py                      # crea zonas_ruta (también la crea el importador)
+python scripts\migrar_rutas_puntos_criticos.py   # paradas.punto_critico_id, nodo_id nullable, columnas de turno en rutas
+python scripts\calcular_matriz_distancias.py     # opcional: distancias por calles con OSRM -> data/matriz_distancias.json
+```
+
+**Cómo se arma el reparto**
+- **Puntos:** todos los puntos críticos. Con `solo_prioritarios`, solo los de priorización obligatoria. Con `solo_con_reporte_lleno`, solo los que tienen un reporte de campo vigente `lleno` o `desbordado`.
+- **Camiones:** los del turno en estado `operativo`, activos y no demo. Las reservas entran solo con `incluir_reserva`. Si no hay ninguno, responde **409**: no se inventan camiones.
+- **Distancias:**
+  - Se usa la matriz de OSRM si cubre todos los puntos con sus coordenadas actuales: `metodo_distancia = "osrm"`.
+  - Si no, se usa haversine × `OPTIMIZADOR_FACTOR_CIRCUITO` (1.3): `metodo_distancia = "haversine_aprox"`, una aproximación.
+- **Equilibrio por número de paradas:**
+  - No existe un peso por punto, así que cada ruta lleva como máximo `max_paradas_por_ruta`, que por defecto es `ceil(puntos / camiones)`. Dentro de ese tope, OR-Tools minimiza la distancia total.
+  - La capacidad del camión **no se usa** como restricción: está sin confirmar y no hay pesos.
+- **Distancia de cada ruta:** es el recorrido entre sus puntos. **No incluye** el viaje desde la base ni hasta el relleno, porque esas ubicaciones no están confirmadas.
+- **Tiempo estimado:** `distancia / OPTIMIZADOR_VELOCIDAD_KMH (20) × 60 + paradas × OPTIMIZADOR_MINUTOS_POR_PARADA`. Los minutos por parada valen **5 y son provisionales**: no hay un dato medido.
+- **Horario:** la hora de inicio es la del turno (05:00, 13:00 o 21:00). La noche cruza la medianoche. Si la hora estimada de fin pasa el fin del turno, la ruta sale con `excede_turno = true`.
+- **Conductor:** la ruta queda asignada al usuario de `conductores` cuyo `camion_id` es ese camión. Si no hay ninguno, queda sin conductor.
+- **Regenerar el mismo turno y fecha:**
+  - Reemplaza solo las rutas `Pendiente` generadas para ese turno.
+  - No toca las rutas `en_proceso` ni `Completado`, ni las creadas a mano. Los camiones y puntos de las rutas en curso quedan fuera del nuevo reparto.
+
+Los parámetros se cambian con variables de entorno (ver `app/config.py`): `OPTIMIZADOR_FACTOR_CIRCUITO`, `OPTIMIZADOR_VELOCIDAD_KMH`, `OPTIMIZADOR_MINUTOS_POR_PARADA`, `OPTIMIZADOR_TIEMPO_MAX_S` (10 s de búsqueda por defecto), `MATRIZ_DISTANCIAS_ARCHIVO` y `OSRM_URL`.
+
+`scripts/calcular_matriz_distancias.py`:
+- Consulta el OSRM público de demostración (`/table`) por bloques equilibrados de como mucho 25 puntos. Con 151 puntos salen 7 bloques de 21–22 y nunca un bloque de un solo punto, que OSRM rechaza con 400. Ninguna petición pasa de 50 coordenadas.
+- Hace una pausa de 1 s entre peticiones y reintenta cada bloque hasta 4 veces, con espera creciente (2, 4 y 8 s).
+- Guarda el avance en `data/matriz_distancias.parcial.json` (ignorado por git). Si se corta, al volver a correrlo reanuda desde ahí; `--desde-cero` lo descarta.
+- Escribe `data/matriz_distancias.json` solo si la matriz está completa y validada: N×N, sin nulos, diagonal en 0 y sin valores negativos.
+- Si OSRM no encuentra ruta por calles entre dos puntos, ese par queda con la distancia aproximada (haversine × factor de circuito). El resumen final dice cuántos fueron y el archivo los lista en `pares_aproximados`.
+- Solo envía coordenadas de los puntos críticos, que son públicas. Hay que correrlo de nuevo si cambian los puntos.
+
+Ejemplo (PowerShell, con token de `municipalidad`):
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/rutas/generar -Headers @{ Authorization = "Bearer $token" } `
+  -ContentType "application/json" `
+  -Body '{"turno": "noche", "fecha": "2026-11-20", "solo_prioritarios": false, "solo_con_reporte_lleno": false, "incluir_reserva": false}'
+```
+
+Respuesta (resumida):
+
+```json
+{
+  "turno": "noche", "fecha": "2026-11-20", "nro_camiones": 13, "nro_puntos": 151,
+  "max_paradas_por_ruta": 12, "metodo_distancia": "haversine_aprox",
+  "distancia_total_km": 0.0, "tiempo_total_min": 0.0, "rutas_reemplazadas": 0,
+  "camiones_con_ruta_en_curso": [],
+  "parametros": {"velocidad_media_kmh": 20, "minutos_por_parada": 5, "factor_circuito": 1.3,
+                 "capacidad_camion_usada": false, "provisionales": ["minutos_por_parada", "velocidad_media_kmh", "factor_circuito"],
+                 "notas": ["..."]},
+  "rutas": [
+    {"ruta_id": 1, "camion": {"id": 25, "placa": "CAM-N01"}, "conductor_id": null,
+     "hora_inicio": "2026-11-20T21:00:00", "hora_fin": "2026-11-21T00:10:00", "excede_turno": false,
+     "distancia_km": 0.0, "tiempo_estimado_min": 0.0,
+     "paradas": [{"orden": 1, "punto_critico_id": 10, "codigo": "130101-10", "lat": -8.1, "lon": -79.03, "direccion": "..."}]}
+  ]
+}
+```
+
+(Los números son ilustrativos del formato, no un resultado real.)
+
+`GET /rutas/mias` (la ruta del conductor), `GET /rutas/hoy` y `GET /rutas/{id}` devuelven además:
+- por ruta: `turno`, `distancia_km`, `tiempo_estimado_min` y `metodo_distancia`;
+- por parada: `punto_critico_id` y `punto_critico` (`id, codigo, direccion, referencia, lat, lon, priorizacion_obligatoria, estado_llenado`). En esas paradas, `nodo_id` y `nodo` vienen en null.
+
+## Rutas por zona
+
+Son las rutas de recolección por zona de Trujillo (`M-1`…`M-10`, `N-1`…`N-9`), en la tabla `zonas_ruta`. Cada ruta tiene **uno o más tramos** (1, 2, 3…), cada uno con sus sectores, su horario de recojo y el horario para sacar la basura. Hay **una fila por tramo** y la unicidad es **(codigo, tramo)**.
+
+El CSV oficial está en `data/rutas_zona_trujillo.csv`, con una fila por tramo: 66 tramos de 19 rutas, 10 de mañana y 9 de noche. Columnas: `ruta, turno, tramo, sectores, recojo_inicio, recojo_fin, sacar_basura_inicio, sacar_basura_fin` y, opcionalmente, `revisar` (`true`/`false` por fila). Las horas van en formato 24 h (`HH:MM`; `24:00` se guarda como `00:00`).
+
+```powershell
+python scripts\migrar_zonas_ruta_tramos.py   # base existente: pasa a único por (codigo, tramo); el importador también la aplica
 python scripts\importar_rutas_zona.py
 python scripts\importar_rutas_zona.py --archivo otra\ruta.csv
 ```
 
+- `migrar_zonas_ruta_tramos.py`:
+  - Quita la unicidad solo por `codigo`.
+  - Deja `tramo = 1` en las filas que no lo tengan y lo convierte en entero obligatorio.
+  - Agrega la restricción única `(codigo, tramo)`.
+  - No borra filas, puede correrse varias veces, y se detiene sin cambiar nada si algún tramo no es un número.
+- `tramo` es un entero ≥ 1. Repetir el mismo (ruta, tramo) en el archivo se rechaza, y también un tramo con un turno distinto al del resto de su ruta.
 - `turno` acepta `manana`, `mañana`, `tarde` o `noche` y se guarda como `manana|tarde|noche`.
-- `cruza_medianoche` se calcula: es `true` si el recojo termina después de las 00:00 (por ejemplo 21:00–05:00). Terminar justo a las 24:00 no cuenta.
-- `revisar=true` marca datos dudosos. Se activa si el CSV lo pide o si la ruta está en `CODIGOS_REVISAR` del script. Hoy esa lista solo tiene `N-9`, que tiene impreso un hueco 23:00–24:00 y se importa tal cual.
-- No se inventan datos: lo que el CSV no trae (tramo, sectores, horario para sacar la basura) queda vacío.
-- Actualiza por código de ruta, así que puede correrse varias veces sin duplicar. Al final imprime el total, la cantidad por turno y cuántas rutas están por revisar.
+- `cruza_medianoche` se calcula por tramo: es `true` si el recojo termina después de las 00:00 (por ejemplo, N-1 tramo 1, de 21:30 a 04:00). Terminar justo a las 24:00 no cuenta.
+- `revisar=true` marca datos dudosos. Se activa si la fila lo pide en el CSV o si la ruta está en `CODIGOS_REVISAR` del script; en ese caso aplica a **todos** sus tramos. Hoy esa lista solo tiene `N-9`, que tiene impreso un hueco entre su tramo 1 (termina a las 23:00) y su tramo 2 (empieza a las 00:00), y se importa tal cual.
+- Actualiza por (ruta, tramo), así que puede correrse varias veces sin duplicar.
+- Al final imprime las filas leídas, creadas, actualizadas y rechazadas, el número de rutas distintas, las **rutas** por turno (no filas) y cuántos tramos están por revisar.
+
+Con el CSV oficial, la primera importación debe dar 66 filas leídas, 0 rechazadas, 19 rutas y 66 tramos, 10 rutas de mañana, 0 de tarde y 9 de noche, y 4 tramos por revisar (los de N-9). En una base que ya tenía los 19 primeros tramos, salen 47 creadas y 19 sin cambios.
 
 Endpoints (solo lectura, roles `municipalidad` y `conductor`):
-- `GET /zonas-ruta`: todas las rutas ordenadas por turno y código. Acepta el filtro opcional `?turno=manana|mañana|tarde|noche` (422 si no es válido). En la respuesta el turno siempre sale como `manana`.
-- `GET /zonas-ruta/{codigo}`: detalle (p. ej. `N-9`); 404 si no existe.
+- `GET /zonas-ruta`: **un elemento por tramo**, ordenado por código (M-2 antes que M-10) y tramo. Acepta el filtro opcional `?turno=manana|mañana|tarde|noche` (422 si no es válido). En la respuesta el turno siempre sale como `manana`.
+- `GET /zonas-ruta/{codigo}`: **lista con todos los tramos** de esa ruta, en orden de tramo (p. ej. `N-9` devuelve 4); 404 si no existe.
+- Cada elemento trae `id, codigo, turno, tramo` (entero), `sectores, recojo_inicio, recojo_fin, sacar_basura_inicio, sacar_basura_fin, cruza_medianoche, revisar`.
 
 ## Flota unificada: `camiones` reemplaza a `vehiculos`
 

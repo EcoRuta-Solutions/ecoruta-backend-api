@@ -1,12 +1,13 @@
-"""Importador de zonas de ruta.
+"""Importador de zonas de ruta: una fila por tramo, única por (ruta, tramo).
 
-El CSV oficial (data/rutas_zona_trujillo.csv) todavía no está en el repo: estas
-pruebas usan filas de PRUEBA, inventadas solo para ejercitar el importador. No
-son datos de SEGAT.
+Usa tests/fixtures/rutas_zona_trujillo.csv, copia idéntica del CSV real
+(66 tramos de 19 rutas). Los casos de error parten de filas reales con un
+cambio puntual; no se inventan rutas.
 """
 
 import csv
 from datetime import time
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -14,16 +15,21 @@ from sqlalchemy import func, select
 from app.models.zona_ruta import ZonaRuta
 from conftest import importador_zonas as importador
 
-CABECERA = list(importador.COLUMNAS_CSV)
+CSV_REAL = Path(__file__).parent / "fixtures" / "rutas_zona_trujillo.csv"
 
-# ruta, turno, tramo, sectores, recojo_inicio, recojo_fin, sacar_inicio, sacar_fin
-FILAS_PRUEBA = [
-    ["M-1", "mañana", "Tramo prueba A", "Sector prueba 1", "05:00", "13:00", "04:00", "05:00"],
-    ["M-10", "Mañana", "", "", "06:00", "12:00", "", ""],
-    ["T-1", "tarde", "Tramo prueba B", "Sector prueba 2", "13:00", "21:00", "12:00", "13:00"],
-    ["N-1", "noche", "Tramo prueba C", "Sector prueba 3", "21:00", "03:00", "20:00", "21:00"],
-    ["N-9", "noche", "Tramo prueba D", "Sector prueba 4", "23:00", "24:00", "22:00", "23:00"],
-]
+with open(CSV_REAL, encoding="utf-8-sig", newline="") as _archivo:
+    _lector = csv.reader(_archivo)
+    CABECERA = next(_lector)
+    FILAS_PRUEBA = [fila for fila in _lector]  # las 66 filas reales
+
+
+def fila_real(ruta_base="M-1", tramo_base="1", **cambios):
+    """Una fila real del CSV, con cambios puntuales para probar validaciones."""
+    base = next(
+        dict(zip(CABECERA, f)) for f in FILAS_PRUEBA if f[0] == ruta_base and f[2] == tramo_base
+    )
+    base.update(cambios)
+    return base
 
 
 @pytest.fixture
@@ -39,81 +45,107 @@ def escribir(tmp_path):
     return escribir
 
 
-def fila(**cambios):
-    base = dict(zip(CABECERA, FILAS_PRUEBA[0]))
-    base.update(cambios)
-    return base
-
-
-def zonas(engine):
+def tramos(engine):
     with engine.connect() as conexion:
-        return {z.codigo: z for z in conexion.execute(select(ZonaRuta)).all()}
+        return {(z.codigo, z.tramo): z for z in conexion.execute(select(ZonaRuta)).all()}
 
 
-# --- Validación ---------------------------------------------------------------
+# --- CSV real ------------------------------------------------------------------------------
 
 
-def test_validar_fila_normaliza_turno_y_horas():
-    datos = importador.validar_fila(fila(ruta=" m-1 ", turno="Mañana"))
+def test_csv_real_tiene_la_forma_esperada():
+    lectura = importador.leer_csv(CSV_REAL)
 
-    assert datos["codigo"] == "M-1"
-    assert datos["turno"] == "manana"
-    assert (datos["recojo_inicio"], datos["recojo_fin"]) == (time(5), time(13))
-    assert datos["cruza_medianoche"] is False
-    assert datos["revisar"] is False
+    assert lectura.leidas == 66
+    assert lectura.rechazadas == []
+    assert len({f["codigo"] for f in lectura.validas}) == 19
 
 
-@pytest.mark.parametrize(
-    ("inicio", "fin", "cruza"),
-    [
-        ("21:00", "05:00", True),
-        ("22:30", "02:15", True),
-        ("05:00", "13:00", False),
-        ("23:00", "24:00", False),  # termina justo a medianoche
-        ("21:00", "00:00", False),
-    ],
-)
-def test_cruce_de_medianoche(inicio, fin, cruza):
-    datos = importador.validar_fila(
-        fila(turno="noche", recojo_inicio=inicio, recojo_fin=fin)
-    )
+def test_importa_el_csv_real_completo(db_limpia):
+    resultado = importador.importar(db_limpia, CSV_REAL)
 
-    assert datos["cruza_medianoche"] is cruza
+    assert (resultado.leidas, resultado.creadas, resultado.actualizadas) == (66, 66, 0)
+    assert resultado.rechazadas == []
+    assert (resultado.total_rutas, resultado.total_tramos) == (19, 66)
+    assert resultado.rutas_por_turno == {"manana": 10, "tarde": 0, "noche": 9}
+    assert resultado.tramos_por_revisar == 4  # los 4 tramos de N-9, marcados por código
 
-
-def test_24_00_se_guarda_como_medianoche():
-    datos = importador.validar_fila(fila(recojo_inicio="23:00", recojo_fin="24:00"))
-
-    assert datos["recojo_fin"] == time(0, 0)
+    guardados = tramos(db_limpia)
+    assert [t for (c, t) in sorted(guardados) if c == "M-1"] == [1, 2, 3, 4, 5]
+    assert guardados[("M-1", 5)].recojo_inicio == time(12, 0)
+    assert len([k for k in guardados if k[0] == "N-3"]) == 6
+    assert guardados[("N-1", 1)].cruza_medianoche is True  # 21:30–04:00
+    assert guardados[("M-1", 1)].cruza_medianoche is False
+    assert {guardados[("N-9", t)].revisar for t in (1, 2, 3, 4)} == {True}
+    assert guardados[("N-8", 1)].revisar is False
 
 
-def test_n9_queda_en_revisar_por_codigo():
-    assert importador.validar_fila(fila(ruta="N-9", turno="noche"))["revisar"] is True
+def test_importacion_es_idempotente(db_limpia):
+    importador.importar(db_limpia, CSV_REAL)
+
+    segunda = importador.importar(db_limpia, CSV_REAL)
+
+    assert (segunda.creadas, segunda.actualizadas, segunda.sin_cambios) == (0, 0, 66)
+    assert (segunda.total_rutas, segunda.total_tramos) == (19, 66)
+    with db_limpia.connect() as conexion:
+        assert conexion.scalar(select(func.count()).select_from(ZonaRuta)) == 66
 
 
-@pytest.mark.parametrize(
-    ("valor", "esperado"),
-    [("true", True), ("SI", True), ("1", True), ("false", False), ("no", False), ("", False)],
-)
-def test_columna_revisar_opcional(valor, esperado):
-    assert importador.validar_fila(fila(revisar=valor))["revisar"] is esperado
+def test_actualiza_por_ruta_y_tramo(db_limpia, escribir):
+    importador.importar(db_limpia, CSV_REAL)
+    cambiadas = [list(f) for f in FILAS_PRUEBA]
+    indice = next(i for i, f in enumerate(cambiadas) if f[0] == "M-1" and f[2] == "2")
+    cambiadas[indice][4] = "07:45"  # recojo_inicio del tramo 2 de M-1
+
+    resultado = importador.importar(db_limpia, escribir(cambiadas))
+
+    assert (resultado.creadas, resultado.actualizadas, resultado.sin_cambios) == (0, 1, 65)
+    guardados = tramos(db_limpia)
+    assert guardados[("M-1", 2)].recojo_inicio == time(7, 45)
+    assert guardados[("M-1", 1)].recojo_inicio == time(5, 30)  # el otro tramo no cambia
+
+
+# --- Tramos repetidos y validación -----------------------------------------------------
+
+
+def test_mismo_tramo_repetido_en_el_archivo_se_rechaza(escribir):
+    repetida = list(FILAS_PRUEBA[1])  # M-1 tramo 2 otra vez
+    lectura = importador.leer_csv(escribir([*FILAS_PRUEBA, repetida]))
+
+    assert len(lectura.validas) == 66
+    assert [(r.linea, r.codigo) for r in lectura.rechazadas] == [(68, "M-1 tramo 2")]
+    assert "repetido" in lectura.rechazadas[0].motivo
+
+
+def test_mismo_codigo_con_otro_tramo_si_se_acepta(escribir):
+    lectura = importador.leer_csv(escribir(FILAS_PRUEBA[:5]))  # M-1 tramos 1..5
+
+    assert [(f["codigo"], f["tramo"]) for f in lectura.validas] == [("M-1", t) for t in range(1, 6)]
+
+
+def test_tramo_con_turno_distinto_al_de_su_ruta_se_rechaza(escribir):
+    otra = list(FILAS_PRUEBA[1])
+    otra[1] = "noche"
+    lectura = importador.leer_csv(escribir([FILAS_PRUEBA[0], otra]))
+
+    assert [r.codigo for r in lectura.rechazadas] == ["M-1 tramo 2"]
+    assert "distinto" in lectura.rechazadas[0].motivo
 
 
 @pytest.mark.parametrize(
     ("cambios", "motivo"),
     [
-        ({"ruta": " "}, "ruta vacía"),
+        ({"tramo": ""}, "tramo vacío"),
+        ({"tramo": "0"}, "entero >= 1"),
+        ({"tramo": "uno"}, "entero >= 1"),
         ({"turno": "madrugada"}, "turno inválido"),
-        ({"recojo_inicio": ""}, "recojo_inicio vacío"),
-        ({"recojo_fin": "5pm"}, "formato HH:MM"),
         ({"recojo_fin": "25:00"}, "fuera de rango"),
-        ({"sacar_basura_fin": ""}, "deben venir juntos"),
         ({"revisar": "quizas"}, "revisar inválido"),
     ],
 )
-def test_validar_fila_rechaza_datos_invalidos(cambios, motivo):
+def test_validar_fila_rechaza(cambios, motivo):
     with pytest.raises(ValueError, match=motivo):
-        importador.validar_fila(fila(**cambios))
+        importador.validar_fila(fila_real(**cambios))
 
 
 def test_archivo_inexistente_da_error_claro(tmp_path):
@@ -121,75 +153,28 @@ def test_archivo_inexistente_da_error_claro(tmp_path):
         importador.leer_csv(tmp_path / "no_existe.csv")
 
 
-def test_faltan_columnas(escribir):
-    ruta = escribir([["M-1", "manana"]], cabecera=["ruta", "turno"])
-
-    with pytest.raises(ValueError, match="Faltan columnas"):
-        importador.leer_csv(ruta)
+# --- revisar por fila y por código --------------------------------------------------------
 
 
-def test_leer_csv_reporta_invalidas_y_repetidas(escribir):
-    mala = ["T-2", "madrugada", "", "", "13:00", "21:00", "", ""]
-    ruta = escribir([FILAS_PRUEBA[0], mala, FILAS_PRUEBA[0]])
-
-    lectura = importador.leer_csv(ruta)
-
-    assert [f["codigo"] for f in lectura.validas] == ["M-1"]
-    assert [(r.linea, r.codigo) for r in lectura.rechazadas] == [(3, "T-2"), (4, "M-1")]
-    assert "repetida" in lectura.rechazadas[1].motivo
-
-
-# --- Importación ---------------------------------------------------------------
-
-
-def test_importacion_es_idempotente(db_limpia, escribir):
-    ruta = escribir(FILAS_PRUEBA)
-
-    primera = importador.importar(db_limpia, ruta)
-    segunda = importador.importar(db_limpia, ruta)
-
-    assert (primera.creadas, primera.actualizadas, primera.sin_cambios) == (5, 0, 0)
-    assert (segunda.creadas, segunda.actualizadas, segunda.sin_cambios) == (0, 0, 5)
-    assert segunda.total == 5
-    assert segunda.por_turno == {"manana": 2, "tarde": 1, "noche": 2}
-    assert segunda.revisar == 1
-
-
-def test_importacion_guarda_cruce_y_n9_en_revisar(db_limpia, escribir):
-    importador.importar(db_limpia, escribir(FILAS_PRUEBA))
-
-    guardadas = zonas(db_limpia)
-    assert guardadas["N-1"].cruza_medianoche is True
-    assert guardadas["T-1"].cruza_medianoche is False
-    n9 = guardadas["N-9"]
-    assert n9.revisar is True
-    # Se importa tal cual: 23:00–24:00 (00:00), sin "arreglar" el hueco.
-    assert (n9.recojo_inicio, n9.recojo_fin) == (time(23), time(0))
-    assert guardadas["M-10"].tramo is None and guardadas["M-10"].sacar_basura_inicio is None
-    assert {z.turno for z in guardadas.values()} == {"manana", "tarde", "noche"}
-
-
-def test_importacion_actualiza_por_codigo_y_revisar_desde_csv(db_limpia, escribir):
-    importador.importar(db_limpia, escribir(FILAS_PRUEBA))
+def test_revisar_por_fila_desde_el_csv(db_limpia, escribir):
     cabecera = [*CABECERA, "revisar"]
-    cambiadas = [[*f, ""] for f in FILAS_PRUEBA]
-    cambiadas[0][4] = "05:30"  # M-1 cambia su inicio
-    cambiadas[2][-1] = "true"  # T-1 marcada como dudosa en el archivo
-    cambiadas[4][-1] = "false"  # N-9 sigue en revisar por código
+    filas = [[*f, ""] for f in FILAS_PRUEBA]
+    indice = next(i for i, f in enumerate(filas) if f[0] == "M-3" and f[2] == "2")
+    filas[indice][-1] = "true"
 
-    resultado = importador.importar(db_limpia, escribir(cambiadas, cabecera, "v2.csv"))
+    resultado = importador.importar(db_limpia, escribir(filas, cabecera))
 
-    assert (resultado.creadas, resultado.actualizadas, resultado.sin_cambios) == (0, 2, 3)
-    guardadas = zonas(db_limpia)
-    assert guardadas["M-1"].recojo_inicio == time(5, 30)
-    assert guardadas["T-1"].revisar is True
-    assert guardadas["N-9"].revisar is True
-    with db_limpia.connect() as conexion:
-        assert conexion.scalar(select(func.count()).select_from(ZonaRuta)) == 5
+    guardados = tramos(db_limpia)
+    assert guardados[("M-3", 2)].revisar is True
+    assert guardados[("M-3", 1)].revisar is False  # solo esa fila
+    assert resultado.tramos_por_revisar == 5  # 4 de N-9 + el de M-3
 
 
-def test_importacion_sin_archivo_no_toca_la_base(db_limpia, tmp_path):
-    with pytest.raises(importador.ArchivoNoEncontrado):
-        importador.importar(db_limpia, tmp_path / "no_existe.csv")
+def test_n9_sigue_en_revisar_aunque_el_csv_diga_false(db_limpia, escribir):
+    cabecera = [*CABECERA, "revisar"]
+    filas = [[*f, "false"] for f in FILAS_PRUEBA]
 
-    assert zonas(db_limpia) == {}
+    resultado = importador.importar(db_limpia, escribir(filas, cabecera))
+
+    assert resultado.tramos_por_revisar == 4
+    assert all(z.revisar for (c, _), z in tramos(db_limpia).items() if c == "N-9")

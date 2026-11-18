@@ -1,220 +1,395 @@
-from datetime import date, datetime
-from types import SimpleNamespace
-from unittest.mock import Mock
+"""POST /rutas/generar: rutas por turno con puntos críticos y flota reales.
+
+Los puntos, camiones y reportes de estas pruebas se crean solo para ejercitar
+el generador (coordenadas dentro de Trujillo); no son datos oficiales.
+"""
+
+import json
+import math
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fastapi import HTTPException
-from pydantic import ValidationError
-from sqlalchemy.sql import operators
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
+from app import config
+from app.core.security import create_access_token
+from app.database import get_db
+from app.main import app
+from app.models.camion import Camion
+from app.models.conductor import Conductor
+from app.models.punto_critico import PuntoCritico
+from app.models.reporte_campo import ReporteCampo
 from app.models.ruta import Parada, Ruta
-from app.routers import rutas
-from app.schemas.ruta import RutaGenerarRequest
+from app.models.usuario import Usuario
+from conftest import importador
 
+FECHA = date(2026, 11, 20)
 
-class FakeQuery:
-    def __init__(self, resultado):
-        self.resultado = resultado
+# 10 puntos de prueba en una grilla dentro del rango de Trujillo.
+FILAS_PUNTOS = [
+    [f"130101-{n}", "Potencial", "SI" if n <= 4 else "NO",
+     f"{-8.120 + (n % 5) * 0.006:.6f}", f"{-79.050 + (n // 5) * 0.008:.6f}",
+     "", "", f"Calle de prueba {n}", ""]
+    for n in range(1, 11)
+]
 
-    def filter(self, *args, **kwargs):
-        return self
-
-    def first(self):
-        return self.resultado
-
-
-class FakeDB:
-    def __init__(self, camion=None, ruta_existente=None):
-        self.camion = camion
-        self.ruta_existente = ruta_existente
-        self.agregados = []
-        self.commits = 0
-
-    def get(self, modelo, id):
-        return self.camion
-
-    def query(self, modelo):
-        return FakeQuery(self.ruta_existente)
-
-    def add(self, obj):
-        self.agregados.append(obj)
-
-    def flush(self):
-        for obj in self.agregados:
-            if isinstance(obj, Ruta) and obj.id is None:
-                obj.id = 1
-
-    def commit(self):
-        self.commits += 1
-
-    def refresh(self, obj):
-        pass
-
-    def rollback(self):
-        pass
-
-
-def nodo(id, lat, lon, estado="critico", fill=90.0):
-    return SimpleNamespace(
-        id=id, latitud=lat, longitud=lon, estado=estado, fill_pct=fill
-    )
-
-
-def camion(turno="Mañana"):
-    return SimpleNamespace(id=1, placa="ABC-123", capacidad=1000, turno=turno)
+# placa, turno, estado, es_demo
+CAMIONES = [
+    ("CAM-M01", "manana", "operativo", False),
+    ("CAM-M02", "manana", "operativo", False),
+    ("CAM-M03", "Mañana", "operativo", False),  # formato viejo del turno
+    ("CAM-R01", "manana", "reserva", False),
+    ("CAM-X01", "manana", "mantenimiento", False),
+    ("TCA-241", "Mañana", "operativo", True),  # demo: nunca entra
+    ("CAM-N01", "noche", "operativo", False),
+    ("CAM-N02", "noche", "operativo", False),
+]
 
 
 @pytest.fixture
-def estados(monkeypatch):
-    lista = [
-        nodo(1, 0.0, 0.0),
-        nodo(2, 0.0, 1.0, fill=95.0),
-        nodo(3, 1.0, 1.0),
-        nodo(4, 1.0, 0.0, estado="normal", fill=20.0),
-    ]
-    monkeypatch.setattr(rutas, "obtener_estados", lambda db: lista)
-    return lista
+def entorno(db_limpia, escribir_csv, tmp_path, monkeypatch):
+    importador.importar(db_limpia, escribir_csv(FILAS_PUNTOS))
+    monkeypatch.setattr(config, "OPTIMIZADOR_TIEMPO_MAX_S", 1)
+    # Sin matriz OSRM salvo que la prueba la escriba aquí.
+    monkeypatch.setattr(config, "MATRIZ_DISTANCIAS_ARCHIVO", str(tmp_path / "matriz.json"))
+
+    Sesion = sessionmaker(bind=db_limpia, autoflush=False)
+    tokens, ids = {}, {}
+    with Sesion() as db:
+        for placa, turno, estado, demo in CAMIONES:
+            db.add(Camion(placa=placa, turno=turno, estado=estado, es_demo=demo))
+        for rol in ("municipalidad", "conductor"):
+            usuario = Usuario(email=f"{rol}@prueba.test", nombre=rol, password_hash="x", rol=rol)
+            db.add(usuario)
+            db.flush()
+            tokens[rol] = create_access_token(usuario.id, rol)
+            ids[rol] = usuario.id
+        db.commit()
+
+    def get_db_pruebas():
+        db = Sesion()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = get_db_pruebas
+    cliente = TestClient(app)
+    cliente.headers["Authorization"] = f"Bearer {tokens['municipalidad']}"
+    try:
+        yield cliente, Sesion, tokens, ids, tmp_path
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
-def peticion(**extra):
-    return RutaGenerarRequest(fecha=date(2026, 10, 9), camion_id=1, **extra)
+def generar(cliente, **cuerpo):
+    return cliente.post("/rutas/generar", json={"turno": "manana", "fecha": FECHA.isoformat(), **cuerpo})
 
 
-def test_generar_ruta_guarda_ruta_y_paradas_en_orden(estados):
-    db = FakeDB(camion=camion())
-
-    resultado = rutas.generar_ruta(peticion(), db=db)
-
-    paradas = [o for o in db.agregados if isinstance(o, Parada)]
-    guardada = [o for o in db.agregados if isinstance(o, Ruta)][0]
-
-    assert db.commits == 1
-    assert guardada.estado == "Pendiente"
-    assert guardada.camion_id == 1
-    assert [p.orden for p in paradas] == [1, 2, 3]
-    assert {p.nodo_id for p in paradas} == {1, 2, 3}
-    assert paradas[0].nodo_id == 2  # inicia en el nodo más lleno
-    assert resultado["metodo"] in {"ortools", "clarke_wright_tabu"}
-    assert resultado["distancia_km"] > 0
+def codigos_de(respuesta):
+    return [p["codigo"] for r in respuesta["rutas"] for p in r["paradas"]]
 
 
-def test_generar_ruta_respeta_inicio_id(estados):
-    db = FakeDB(camion=camion())
-
-    rutas.generar_ruta(peticion(inicio_id=3), db=db)
-
-    paradas = [o for o in db.agregados if isinstance(o, Parada)]
-    assert paradas[0].nodo_id == 3
+# --- Reparto ------------------------------------------------------------------------
 
 
-def test_generar_ruta_turno_noche_termina_al_dia_siguiente(estados):
-    db = FakeDB(camion=camion("Noche"))
+def test_reparto_equilibrado_por_paradas(entorno):
+    cliente, Sesion, *_ = entorno
 
-    rutas.generar_ruta(peticion(), db=db)
+    respuesta = generar(cliente)
 
-    guardada = [o for o in db.agregados if isinstance(o, Ruta)][0]
-    assert guardada.hora_inicio == datetime(2026, 10, 9, 21)
-    assert guardada.hora_fin == datetime(2026, 10, 10, 5)
-    assert guardada.fecha_fin == date(2026, 10, 10)
+    assert respuesta.status_code == 201
+    datos = respuesta.json()
+    assert (datos["turno"], datos["nro_camiones"], datos["nro_puntos"]) == ("manana", 3, 10)
+    assert datos["max_paradas_por_ruta"] == math.ceil(10 / 3) == 4
+    tamanos = [len(r["paradas"]) for r in datos["rutas"]]
+    assert sum(tamanos) == 10 and max(tamanos) <= 4
+    assert sorted(codigos_de(datos)) == sorted(f[0] for f in FILAS_PUNTOS)  # cada punto una vez
+    placas = {r["camion"]["placa"] for r in datos["rutas"]}
+    assert placas <= {"CAM-M01", "CAM-M02", "CAM-M03"}  # sin reserva, mantenimiento ni demo
+    assert datos["distancia_total_km"] == pytest.approx(sum(r["distancia_km"] for r in datos["rutas"]), abs=0.01)
+    assert datos["parametros"]["capacidad_camion_usada"] is False
+    for ruta in datos["rutas"]:
+        assert [p["orden"] for p in ruta["paradas"]] == list(range(1, len(ruta["paradas"]) + 1))
+        assert {"codigo", "lat", "lon", "direccion", "punto_critico_id"} <= ruta["paradas"][0].keys()
+        esperado = ruta["distancia_km"] / 20 * 60 + len(ruta["paradas"]) * 5
+        assert ruta["tiempo_estimado_min"] == pytest.approx(esperado, abs=0.2)
+
+    with Sesion() as db:
+        rutas = db.query(Ruta).all()
+        assert len(rutas) == len(datos["rutas"])
+        assert all(r.es_demo is False and r.turno == "manana" and r.estado == "Pendiente" for r in rutas)
+        assert all(r.hora_inicio == datetime(2026, 11, 20, 5) for r in rutas)
+        paradas = db.query(Parada).all()
+        assert len(paradas) == 10
+        assert all(p.punto_critico_id is not None and p.nodo_id is None for p in paradas)
 
 
-@pytest.mark.parametrize(
-    ("turno", "inicio", "fin"),
-    [("Mañana", 5, 13), ("manana", 5, 13), ("Tarde", 13, 21), ("tarde", 13, 21)],
-)
-def test_generar_ruta_usa_horario_de_turnos(estados, turno, inicio, fin):
-    db = FakeDB(camion=camion(turno))
+def test_incluir_reserva_suma_camiones(entorno):
+    cliente, *_ = entorno
 
-    rutas.generar_ruta(peticion(), db=db)
+    datos = generar(cliente, incluir_reserva=True).json()
 
-    guardada = [o for o in db.agregados if isinstance(o, Ruta)][0]
-    assert guardada.hora_inicio == datetime(2026, 10, 9, inicio)
-    assert guardada.hora_fin == datetime(2026, 10, 9, fin)
-    assert guardada.fecha_fin == date(2026, 10, 9)
+    assert datos["nro_camiones"] == 4
+    assert datos["max_paradas_por_ruta"] == 3
+    assert all(len(r["paradas"]) <= 3 for r in datos["rutas"])
 
 
-def test_generar_ruta_un_solo_nodo_critico(monkeypatch):
-    monkeypatch.setattr(
-        rutas, "obtener_estados", lambda db: [nodo(7, 0.0, 0.0)]
+def test_max_paradas_por_ruta_menor_al_minimo_da_422(entorno):
+    cliente, *_ = entorno
+
+    respuesta = generar(cliente, max_paradas_por_ruta=3)  # 10 puntos / 3 camiones necesita 4
+
+    assert respuesta.status_code == 422
+    assert "al menos 4" in respuesta.json()["detail"]
+
+
+def test_solo_prioritarios(entorno):
+    cliente, *_ = entorno
+
+    datos = generar(cliente, solo_prioritarios=True).json()
+
+    assert datos["nro_puntos"] == 4
+    assert sorted(codigos_de(datos)) == ["130101-1", "130101-2", "130101-3", "130101-4"]
+
+
+def test_solo_con_reporte_lleno_usa_reportes_vigentes(entorno):
+    cliente, Sesion, _, ids, _ = entorno
+    ahora = datetime.now(timezone.utc)
+    with Sesion() as db:
+        punto = {p.codigo_unico: p.id for p in db.query(PuntoCritico)}
+        for codigo, estado, horas in [
+            ("130101-1", "lleno", 1), ("130101-2", "desbordado", 2),
+            ("130101-3", "lleno", 30),  # vencido
+            ("130101-4", "medio", 1),
+        ]:
+            db.add(ReporteCampo(punto_critico_id=punto[codigo], usuario_id=ids["conductor"],
+                                estado=estado, creado_en=ahora - timedelta(hours=horas)))
+        db.commit()
+
+    datos = generar(cliente, solo_con_reporte_lleno=True).json()
+
+    assert sorted(codigos_de(datos)) == ["130101-1", "130101-2"]
+
+
+def test_sin_puntos_con_los_filtros_da_404(entorno):
+    cliente, *_ = entorno
+
+    respuesta = generar(cliente, solo_con_reporte_lleno=True)
+
+    assert respuesta.status_code == 404
+
+
+# --- Sin camiones ---------------------------------------------------------------------
+
+
+def test_turno_sin_camiones_da_409_y_no_crea_nada(entorno):
+    cliente, Sesion, *_ = entorno
+
+    respuesta = generar(cliente, turno="tarde")
+
+    assert respuesta.status_code == 409
+    assert "No hay camiones operativos" in respuesta.json()["detail"]
+    assert "tarde" in respuesta.json()["detail"]
+    with Sesion() as db:
+        assert db.query(Ruta).count() == 0
+
+
+# --- Método de distancia --------------------------------------------------------------
+
+
+def test_sin_matriz_usa_haversine_aprox(entorno):
+    cliente, *_ = entorno
+
+    datos = generar(cliente).json()
+
+    assert datos["metodo_distancia"] == "haversine_aprox"
+    assert datos["parametros"]["factor_circuito"] == 1.3
+    assert "factor_circuito" in datos["parametros"]["provisionales"]
+
+
+def escribir_matriz(ruta, Sesion, metros=1000, cambiar_coordenada=False):
+    with Sesion() as db:
+        puntos = [(p.codigo_unico, p.lat, p.lon) for p in db.query(PuntoCritico).order_by(PuntoCritico.id)]
+    coordenadas = {c: [round(lat, 6), round(lon, 6)] for c, lat, lon in puntos}
+    if cambiar_coordenada:
+        coordenadas["130101-1"][0] += 0.001
+    n = len(puntos)
+    datos = {
+        "fuente": "osrm",
+        "codigos": [c for c, _, _ in puntos],
+        "coordenadas": coordenadas,
+        "distancias_m": [[0 if i == j else metros for j in range(n)] for i in range(n)],
+    }
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def test_con_matriz_usa_osrm(entorno):
+    cliente, Sesion, _, _, tmp_path = entorno
+    escribir_matriz(tmp_path / "matriz.json", Sesion, metros=1000)
+
+    datos = generar(cliente).json()
+
+    assert datos["metodo_distancia"] == "osrm"
+    assert datos["parametros"]["factor_circuito"] is None
+    # Todas las distancias valen 1 km: cada ruta de k paradas mide k-1 km.
+    for ruta in datos["rutas"]:
+        assert ruta["distancia_km"] == pytest.approx(len(ruta["paradas"]) - 1)
+
+
+def test_matriz_desactualizada_vuelve_a_haversine(entorno):
+    cliente, Sesion, _, _, tmp_path = entorno
+    escribir_matriz(tmp_path / "matriz.json", Sesion, cambiar_coordenada=True)
+
+    assert generar(cliente).json()["metodo_distancia"] == "haversine_aprox"
+
+
+# --- Regeneración ----------------------------------------------------------------------
+
+
+def test_regenerar_reemplaza_pendientes(entorno):
+    cliente, Sesion, *_ = entorno
+
+    primera = generar(cliente).json()
+    segunda = generar(cliente).json()
+
+    assert segunda["rutas_reemplazadas"] == len(primera["rutas"])
+    assert len(segunda["rutas"]) == len(primera["rutas"])
+    with Sesion() as db:
+        assert db.query(Ruta).count() == len(segunda["rutas"])
+        assert db.query(Parada).count() == 10
+        assert {r.id for r in db.query(Ruta)} == {r["ruta_id"] for r in segunda["rutas"]}
+
+
+def test_regenerar_no_toca_rutas_en_curso_ni_completadas_ni_otros_turnos(entorno):
+    cliente, Sesion, *_ = entorno
+    primera = generar(cliente).json()
+    generar(cliente, turno="noche")
+    en_curso, completada = primera["rutas"][0], primera["rutas"][1]
+    with Sesion() as db:
+        db.get(Ruta, en_curso["ruta_id"]).estado = "en_proceso"
+        db.get(Ruta, completada["ruta_id"]).estado = "Completado"
+        db.commit()
+
+    nueva = generar(cliente).json()
+
+    ocupados = {en_curso["camion"]["placa"], completada["camion"]["placa"]}
+    assert sorted(nueva["camiones_con_ruta_en_curso"]) == sorted(ocupados)
+    assert nueva["nro_camiones"] == 1
+    assert {r["camion"]["placa"] for r in nueva["rutas"]}.isdisjoint(ocupados)
+    ya_asignados = {p["codigo"] for r in (en_curso, completada) for p in r["paradas"]}
+    assert set(codigos_de(nueva)).isdisjoint(ya_asignados)
+    assert nueva["nro_puntos"] == 10 - len(ya_asignados)
+    with Sesion() as db:
+        assert db.get(Ruta, en_curso["ruta_id"]).estado == "en_proceso"
+        assert len(db.get(Ruta, completada["ruta_id"]).paradas) == len(completada["paradas"])
+        assert db.query(Ruta).filter(Ruta.turno == "noche").count() >= 1
+
+
+def test_todos_los_camiones_ocupados_da_409(entorno):
+    cliente, Sesion, *_ = entorno
+    generar(cliente, turno="noche")
+    with Sesion() as db:
+        for ruta in db.query(Ruta).filter(Ruta.turno == "noche"):
+            ruta.estado = "en_proceso"
+        db.commit()
+
+    respuesta = generar(cliente, turno="noche")
+
+    assert respuesta.status_code == 409
+    assert "ya tienen una ruta en curso" in respuesta.json()["detail"]
+
+
+def test_no_reemplaza_rutas_creadas_a_mano(entorno):
+    cliente, Sesion, *_ = entorno
+    with Sesion() as db:
+        camion = db.query(Camion).filter(Camion.placa == "CAM-M01").one()
+        db.add(Ruta(fecha_inicio=FECHA, fecha_fin=FECHA, hora_inicio=datetime(2026, 11, 20, 5),
+                    hora_fin=datetime(2026, 11, 20, 13), camion_id=camion.id, estado="Pendiente"))
+        db.commit()
+
+    generar(cliente)
+    generar(cliente)
+
+    with Sesion() as db:
+        assert db.query(Ruta).filter(Ruta.turno.is_(None)).count() == 1
+
+
+# --- Noche -----------------------------------------------------------------------------
+
+
+def test_noche_empieza_21_y_cruza_medianoche(entorno, monkeypatch):
+    cliente, *_ = entorno
+    monkeypatch.setattr(config, "OPTIMIZADOR_MINUTOS_POR_PARADA", 60)  # 5 paradas ≈ 5 h
+
+    datos = generar(cliente, turno="noche").json()
+
+    assert datos["nro_camiones"] == 2
+    for ruta in datos["rutas"]:
+        inicio = datetime.fromisoformat(ruta["hora_inicio"])
+        fin = datetime.fromisoformat(ruta["hora_fin"])
+        assert inicio == datetime(2026, 11, 20, 21)
+        assert fin.date() == date(2026, 11, 21)  # termina al día siguiente
+        assert ruta["excede_turno"] is (fin > datetime(2026, 11, 21, 5))
+
+
+def test_ruta_que_pasa_el_fin_del_turno_se_marca(entorno, monkeypatch):
+    cliente, *_ = entorno
+    monkeypatch.setattr(config, "OPTIMIZADOR_MINUTOS_POR_PARADA", 200)
+
+    datos = generar(cliente, turno="noche").json()
+
+    assert all(r["excede_turno"] for r in datos["rutas"])
+
+
+# --- Contrato y permisos ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cuerpo", [{"turno": "madrugada"}, {}, {"turno": "manana", "max_paradas_por_ruta": 0}])
+def test_peticion_invalida_da_422(entorno, cuerpo):
+    cliente, *_ = entorno
+
+    assert cliente.post("/rutas/generar", json=cuerpo).status_code == 422
+
+
+def test_solo_municipalidad_genera(entorno):
+    cliente, _, tokens, _, _ = entorno
+
+    respuesta = cliente.post(
+        "/rutas/generar", json={"turno": "manana"},
+        headers={"Authorization": f"Bearer {tokens['conductor']}"},
     )
-    db = FakeDB(camion=camion())
 
-    rutas.generar_ruta(peticion(), db=db)
-
-    paradas = [o for o in db.agregados if isinstance(o, Parada)]
-    assert [(p.nodo_id, p.orden) for p in paradas] == [(7, 1)]
+    assert respuesta.status_code == 403
 
 
-def test_generar_ruta_camion_inexistente_devuelve_404(estados):
-    with pytest.raises(HTTPException) as error:
-        rutas.generar_ruta(peticion(), db=FakeDB(camion=None))
+def test_mi_ruta_del_conductor_con_puntos_criticos(entorno):
+    cliente, Sesion, tokens, ids, _ = entorno
+    with Sesion() as db:
+        camion = db.query(Camion).filter(Camion.placa == "CAM-N01").one()
+        db.add(Conductor(nombre="Conductor real", usuario_id=ids["conductor"], camion_id=camion.id))
+        db.commit()
 
-    assert error.value.status_code == 404
+    generada = generar(cliente, turno="noche").json()
+    suya = next(r for r in generada["rutas"] if r["camion"]["placa"] == "CAM-N01")
+    otra = next(r for r in generada["rutas"] if r["camion"]["placa"] == "CAM-N02")
+    assert suya["conductor_id"] == ids["conductor"]
+    assert otra["conductor_id"] is None  # sin conductor asignado: no se inventa
 
+    mias = cliente.get(
+        "/rutas/mias", headers={"Authorization": f"Bearer {tokens['conductor']}"}
+    ).json()
 
-def test_generar_ruta_sin_nodos_criticos_devuelve_404(monkeypatch):
-    monkeypatch.setattr(
-        rutas,
-        "obtener_estados",
-        lambda db: [nodo(1, 0.0, 0.0, estado="normal", fill=10.0)],
-    )
+    assert [r["id"] for r in mias] == [suya["ruta_id"]]
+    ruta = mias[0]
+    assert (ruta["turno"], ruta["metodo_distancia"]) == ("noche", "haversine_aprox")
+    assert ruta["distancia_km"] == suya["distancia_km"]
+    parada = sorted(ruta["paradas"], key=lambda p: p["orden"])[0]
+    assert parada["nodo_id"] is None and parada["nodo"] is None
+    assert parada["punto_critico"]["codigo"] == suya["paradas"][0]["codigo"]
+    assert parada["punto_critico"]["estado_llenado"] == "sin_datos"
+    assert isinstance(parada["punto_critico"]["lat"], float)
 
-    with pytest.raises(HTTPException) as error:
-        rutas.generar_ruta(peticion(), db=FakeDB(camion=camion()))
-
-    assert error.value.status_code == 404
-
-
-def test_generar_ruta_inicio_no_critico_devuelve_404(estados):
-    with pytest.raises(HTTPException) as error:
-        rutas.generar_ruta(
-            peticion(inicio_id=4), db=FakeDB(camion=camion())
-        )
-
-    assert error.value.status_code == 404
-
-
-def test_generar_ruta_turno_invalido_devuelve_422(estados):
-    with pytest.raises(HTTPException) as error:
-        rutas.generar_ruta(
-            peticion(), db=FakeDB(camion=camion("Madrugada"))
-        )
-
-    assert error.value.status_code == 422
-
-
-def test_generar_ruta_duplicada_devuelve_409(estados):
-    db = FakeDB(camion=camion(), ruta_existente=object())
-
-    with pytest.raises(HTTPException) as error:
-        rutas.generar_ruta(peticion(), db=db)
-
-    assert error.value.status_code == 409
-
-
-def test_schema_rechaza_fecha_invalida_y_camion_cero():
-    with pytest.raises(ValidationError):
-        RutaGenerarRequest(fecha="no-es-fecha", camion_id=1)
-
-    with pytest.raises(ValidationError):
-        RutaGenerarRequest(fecha=date(2026, 10, 9), camion_id=0)
-
-
-def test_rutas_del_dia_incluye_rutas_que_siguen_activas(monkeypatch):
-    monkeypatch.setattr(rutas, "obtener_estados", lambda db: [])
-    query = Mock()
-    query.options.return_value = query
-    query.filter.return_value = query
-    query.order_by.return_value = query
-    query.all.return_value = []
-    db = Mock()
-    db.query.return_value = query
-
-    rutas.rutas_del_dia(db)
-
-    condiciones = query.filter.call_args.args
-    assert len(condiciones) == 2
-    assert str(condiciones[0].left) == "rutas.fecha_inicio"
-    assert condiciones[0].operator is operators.le
-    assert str(condiciones[1].left) == "rutas.fecha_fin"
-    assert condiciones[1].operator is operators.ge
+    detalle = cliente.get(f"/rutas/{suya['ruta_id']}").json()
+    assert len(detalle["paradas"]) == len(suya["paradas"])

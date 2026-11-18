@@ -18,11 +18,11 @@ def test_enriquecer_llenado_adjunta_llenado_y_prioridad(monkeypatch):
     nodo_sin_lecturas = SimpleNamespace(id=99)
     ruta = SimpleNamespace(
         paradas=[
-            SimpleNamespace(nodo=nodo1),
-            SimpleNamespace(nodo=nodo2),
-            SimpleNamespace(nodo=nodo3),
-            SimpleNamespace(nodo=nodo_sin_lecturas),
-            SimpleNamespace(nodo=None),
+            SimpleNamespace(nodo=nodo1, punto_critico_id=None, punto_critico=None),
+            SimpleNamespace(nodo=nodo2, punto_critico_id=None, punto_critico=None),
+            SimpleNamespace(nodo=nodo3, punto_critico_id=None, punto_critico=None),
+            SimpleNamespace(nodo=nodo_sin_lecturas, punto_critico_id=None, punto_critico=None),
+            SimpleNamespace(nodo=None, punto_critico_id=None, punto_critico=None),
         ]
     )
 

@@ -1,21 +1,25 @@
-from sqlalchemy import Boolean, Column, Integer, String, Text, Time, false
+from sqlalchemy import Boolean, Column, Integer, String, Text, Time, UniqueConstraint, false
 
 from app.database import Base
 
 
 class ZonaRuta(Base):
-    """Ruta de recolección por zona (M-1, T-3, N-9…) según el horario oficial.
+    """Un TRAMO de una ruta de recolección por zona (M-1, N-9…) del horario oficial.
 
-    Se carga con scripts/importar_rutas_zona.py desde data/rutas_zona_trujillo.csv.
+    Cada ruta tiene uno o más tramos (1, 2, 3…) con sus sectores y horarios; una
+    fila por tramo. Se carga con scripts/importar_rutas_zona.py desde
+    data/rutas_zona_trujillo.csv.
     """
 
     __tablename__ = "zonas_ruta"
 
     id = Column(Integer, primary_key=True, index=True)
-    codigo = Column(String, unique=True, index=True, nullable=False)
+    # Código de la ruta; se repite en cada tramo. Único junto con `tramo`.
+    codigo = Column(String, index=True, nullable=False)
     # Valor de app.core.turnos.Turno: "manana", "tarde" o "noche".
     turno = Column(String, nullable=False, index=True)
-    tramo = Column(String, nullable=True)
+    # Número de tramo dentro de la ruta (1, 2, 3…).
+    tramo = Column(Integer, nullable=False)
     sectores = Column(Text, nullable=True)
     recojo_inicio = Column(Time, nullable=False)
     recojo_fin = Column(Time, nullable=False)
@@ -26,3 +30,7 @@ class ZonaRuta(Base):
     cruza_medianoche = Column(Boolean, nullable=False, default=False, server_default=false())
     # True si el dato es dudoso y hay que confirmarlo con SEGAT.
     revisar = Column(Boolean, nullable=False, default=False, server_default=false())
+
+    __table_args__ = (
+        UniqueConstraint("codigo", "tramo", name="uq_zonas_ruta_codigo_tramo"),
+    )

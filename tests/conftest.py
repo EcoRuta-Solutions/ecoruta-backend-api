@@ -46,6 +46,8 @@ importador_zonas = _cargar_script("importar_rutas_zona")
 migracion_demo = _cargar_script("migrar_es_demo")
 limpieza_demo = _cargar_script("limpiar_datos_demo")
 migracion_flota = _cargar_script("migrar_unificar_flota")
+migracion_rutas = _cargar_script("migrar_rutas_puntos_criticos")
+matriz_osrm = _cargar_script("calcular_matriz_distancias")
 
 TABLAS_PRUEBA = [
     Usuario.__table__,

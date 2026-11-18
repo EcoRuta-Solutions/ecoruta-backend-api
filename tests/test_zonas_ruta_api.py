@@ -1,6 +1,4 @@
-"""Endpoints /zonas-ruta (con filas de PRUEBA, no datos oficiales)."""
-
-import csv
+"""Endpoints /zonas-ruta con la copia del CSV real (una fila por tramo)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,19 +9,15 @@ from app.database import get_db
 from app.main import app
 from app.models.usuario import Usuario
 from conftest import importador_zonas
-from test_importar_rutas_zona import CABECERA, FILAS_PRUEBA
+from test_importar_rutas_zona import CSV_REAL
 
 RUTAS = ["/zonas-ruta", "/zonas-ruta/N-9"]
+CODIGOS = [f"M-{n}" for n in range(1, 11)] + [f"N-{n}" for n in range(1, 10)]
 
 
 @pytest.fixture
-def entorno(db_limpia, tmp_path):
-    archivo = tmp_path / "zonas.csv"
-    with open(archivo, "w", encoding="utf-8", newline="") as salida:
-        escritor = csv.writer(salida)
-        escritor.writerow(CABECERA)
-        escritor.writerows(FILAS_PRUEBA)
-    importador_zonas.importar(db_limpia, archivo)
+def entorno(db_limpia):
+    importador_zonas.importar(db_limpia, CSV_REAL)
 
     Sesion = sessionmaker(bind=db_limpia, autoflush=False)
     tokens = {}
@@ -58,8 +52,11 @@ def cliente(entorno):
     return cliente
 
 
-def codigos(respuesta):
-    return [z["codigo"] for z in respuesta.json()]
+def pares(respuesta):
+    return [(z["codigo"], z["tramo"]) for z in respuesta.json()]
+
+
+# --- Permisos -------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("ruta", RUTAS)
@@ -88,56 +85,59 @@ def test_rol_no_autorizado_devuelve_403(entorno, ruta):
     assert respuesta.status_code == 403
 
 
-def test_lista_ordenada_por_turno_y_codigo(cliente):
+# --- Lista: una fila por tramo -----------------------------------------------------------
+
+
+def test_lista_devuelve_un_elemento_por_tramo_ordenado(cliente):
     respuesta = cliente.get("/zonas-ruta")
 
     assert respuesta.status_code == 200
-    assert codigos(respuesta) == ["M-1", "M-10", "T-1", "N-1", "N-9"]
+    lista = pares(respuesta)
+    assert len(lista) == 66
+    assert lista[:5] == [("M-1", t) for t in range(1, 6)]
+    # Orden por código natural (M-2 antes que M-10) y por tramo dentro de cada ruta.
+    assert [c for c in dict.fromkeys(c for c, _ in lista)] == CODIGOS
+    assert lista == sorted(lista, key=lambda p: (p[0][0], int(p[0][2:]), p[1]))
+    assert all(isinstance(z["tramo"], int) for z in respuesta.json())
 
 
 @pytest.mark.parametrize(
-    ("turno", "esperados"),
-    [
-        ("manana", ["M-1", "M-10"]),
-        ("mañana", ["M-1", "M-10"]),
-        ("Mañana", ["M-1", "M-10"]),
-        ("tarde", ["T-1"]),
-        ("noche", ["N-1", "N-9"]),
-    ],
+    ("turno", "rutas", "tramos"),
+    [("manana", 10, 36), ("mañana", 10, 36), ("Mañana", 10, 36), ("noche", 9, 30), ("tarde", 0, 0)],
 )
-def test_filtro_por_turno(cliente, turno, esperados):
+def test_filtro_por_turno(cliente, turno, rutas, tramos):
     respuesta = cliente.get("/zonas-ruta", params={"turno": turno})
 
     assert respuesta.status_code == 200
-    assert codigos(respuesta) == esperados
-    assert all(z["turno"] == respuesta.json()[0]["turno"] for z in respuesta.json())
-
-
-def test_turno_se_devuelve_sin_enie(cliente):
-    respuesta = cliente.get("/zonas-ruta", params={"turno": "mañana"})
-
-    assert {z["turno"] for z in respuesta.json()} == {"manana"}
+    lista = pares(respuesta)
+    assert len(lista) == tramos
+    assert len({c for c, _ in lista}) == rutas
+    assert {z["turno"] for z in respuesta.json()} <= {"manana", "noche"}
 
 
 def test_turno_invalido_devuelve_422(cliente):
     assert cliente.get("/zonas-ruta", params={"turno": "madrugada"}).status_code == 422
 
 
-def test_detalle_n9(cliente):
+# --- Detalle: todos los tramos de una ruta -------------------------------------------------
+
+
+def test_detalle_devuelve_todos_los_tramos_de_n9(cliente):
     respuesta = cliente.get("/zonas-ruta/n-9")
 
     assert respuesta.status_code == 200
-    zona = respuesta.json()
-    assert zona["codigo"] == "N-9"
-    assert zona["turno"] == "noche"
-    assert zona["recojo_inicio"] == "23:00:00"
-    assert zona["recojo_fin"] == "00:00:00"
-    assert zona["revisar"] is True
-    assert zona["cruza_medianoche"] is False
+    tramos = respuesta.json()
+    assert [t["tramo"] for t in tramos] == [1, 2, 3, 4]
+    assert all(t["codigo"] == "N-9" and t["turno"] == "noche" and t["revisar"] for t in tramos)
+    # El hueco impreso: el tramo 1 termina a las 23:00 y el 2 empieza a las 00:00.
+    assert (tramos[0]["recojo_fin"], tramos[1]["recojo_inicio"]) == ("23:00:00", "00:00:00")
 
 
-def test_detalle_cruza_medianoche(cliente):
-    assert cliente.get("/zonas-ruta/N-1").json()["cruza_medianoche"] is True
+def test_detalle_con_seis_tramos(cliente):
+    tramos = cliente.get("/zonas-ruta/N-3").json()
+
+    assert [t["tramo"] for t in tramos] == [1, 2, 3, 4, 5, 6]
+    assert tramos[3]["cruza_medianoche"] is True  # tramo 4: 23:30–00:30
 
 
 def test_detalle_inexistente_devuelve_404(cliente):

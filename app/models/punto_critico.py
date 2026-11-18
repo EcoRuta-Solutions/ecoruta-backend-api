@@ -2,6 +2,7 @@ import enum
 
 from geoalchemy2 import Geometry
 from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String
+from sqlalchemy.orm import column_property
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -37,6 +38,9 @@ class PuntoCritico(Base):
     ubicacion = Column(
         Geometry("POINT", srid=4326, spatial_index=True), nullable=False
     )
+    # Solo lectura: lat/lon numéricos desde la geometría (para las paradas de rutas).
+    lat = column_property(func.ST_Y(ubicacion))
+    lon = column_property(func.ST_X(ubicacion))
     creado_en = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
