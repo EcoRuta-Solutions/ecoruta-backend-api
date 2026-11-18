@@ -2,8 +2,15 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+*.env
+!.env.example
 .vscode/
 ml/prediccion/modelos/
 # Avance intermedio de scripts/calcular_matriz_distancias.py
 data/matriz_distancias.parcial.json
 data/*.tmp
+# Respaldos de la base (pueden tener hashes de contraseñas y datos reales)
+*.sql
+*.dump
+*.backup
